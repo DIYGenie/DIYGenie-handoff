@@ -14,8 +14,6 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 const PRICE_ID_CASUAL = process.env.CASUAL_PRICE_ID;
 const PRICE_ID_PRO    = process.env.PRO_PRICE_ID;
-const tierForPrice = id => id===PRICE_ID_CASUAL ? {tier:'casual',quota:5}
-                       : id===PRICE_ID_PRO ? {tier:'pro',quota:25} : {tier:'free',quota:0};
 
 
 // Request logging middleware
@@ -89,6 +87,21 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
 
 // JSON middleware AFTER webhook route
 app.use(express.json());
+
+/* plan/previews credit */
+app.post('/use-plan', async (req, res) => {
+  try {
+    const { user_id, kind } = req.body || {};
+    if (!user_id) return res.status(400).json({ ok:false, error:'missing user_id' });
+    const k = (kind === 'preview') ? 'preview' : 'plan';
+    const { data, error } = await supabase.rpc('use_plan_credit', { p_user_id: user_id, p_kind: k });
+    if (error) return res.status(400).json({ ok:false, error: error.message });
+    return res.json(data);
+  } catch (e) {
+    console.error('use-plan error', e);
+    return res.status(500).json({ ok:false, error:'server_error' });
+  }
+});
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Set cache control headers to prevent caching issues in Replit
