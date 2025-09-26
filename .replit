@@ -15,6 +15,7 @@ ignorePorts = false
 
 [agent]
 expertMode = true
+integrations = ["javascript_stripe:1.0.0"]
 
 [workflows]
 runButton = "Project"
@@ -41,5 +42,13 @@ waitForPort = 5000
 outputType = "webview"
 
 [[ports]]
+localPort = 3000
+externalPort = 3000
+
+[[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 43251
+externalPort = 3001
