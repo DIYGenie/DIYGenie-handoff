@@ -15,6 +15,16 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const PRICE_ID_CASUAL = process.env.CASUAL_PRICE_ID;
 const PRICE_ID_PRO    = process.env.PRO_PRICE_ID;
 
+// Helper function for credit gating
+async function checkCredit(user_id, kind='plan') {
+  const { data, error } = await supabase.rpc('use_plan_credit', { p_user_id: user_id, p_kind: kind });
+  if (error) return { ok:false, code:500, error: 'supabase_error' };
+  if (!data.ok) {
+    const code = data.error === 'exhausted' ? 402 : 403;
+    return { ok:false, code, error: data.error, meta: data };
+  }
+  return { ok:true, meta: data };
+}
 
 // Request logging middleware
 app.use((req,_res,next)=>{ console.log('REQ', req.method, req.url); next(); });
@@ -114,6 +124,26 @@ app.post('/use-plan', async (req, res) => {
     console.error('use-plan error', e);
     return res.status(500).json({ ok:false, error:'server_error' });
   }
+});
+
+// Credit-gated plan generation
+app.post('/generate-plan', async (req,res) => {
+  const { user_id, ...rest } = req.body || {};
+  if (!user_id) return res.status(400).json({ ok:false, error:'missing user_id' });
+  const gate = await checkCredit(user_id, 'plan');
+  if (!gate.ok) return res.status(gate.code).json(gate.meta);
+  // ...do plan generation...
+  return res.json({ ok:true, used: gate.meta.used, remaining: gate.meta.remaining });
+});
+
+// Credit-gated preview generation
+app.post('/generate-preview', async (req,res) => {
+  const { user_id, ...rest } = req.body || {};
+  if (!user_id) return res.status(400).json({ ok:false, error:'missing user_id' });
+  const gate = await checkCredit(user_id, 'preview');
+  if (!gate.ok) return res.status(gate.code).json(gate.meta);
+  // ...call Decor8...
+  return res.json({ ok:true, used: gate.meta.used, remaining: gate.meta.remaining });
 });
 
 // Set cache control headers to prevent caching issues in Replit
