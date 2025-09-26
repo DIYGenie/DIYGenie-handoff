@@ -12,10 +12,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // Initialize Supabase client with service role
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-const PRICE_ID_CASUAL = process.env.CASUAL_PRICE_ID;
-const PRICE_ID_PRO    = process.env.PRO_PRICE_ID;
-const tierForPrice = id => id===PRICE_ID_CASUAL ? {tier:'casual',quota:5}
-                       : id===PRICE_ID_PRO ? {tier:'pro',quota:25} : {tier:'free',quota:0};
 
 // Request logging middleware
 app.use((req,_res,next)=>{ console.log('REQ', req.method, req.url); next(); });
@@ -34,8 +30,6 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
 
   const obj = event.data.object;
 
-  console.log('EVENT', event.type);
-
   try {
     if (event.type === 'checkout.session.completed') {
       // client_reference_id should be your Supabase user_id when you create the session
@@ -44,10 +38,20 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
         .eq('user_id', obj.client_reference_id);
     }
 
+    console.log('EVENT', event.type);
     if (event.type.startsWith('customer.subscription.')) {
       const sub = event.data.object;
-      const priceId = sub.items?.data?.[0]?.price?.id;
+      const priceId = sub.items?.data?.[0]?.price?.id || sub.items?.data?.[0]?.plan?.id; // legacy-safe
+      const periodEndSec = sub.current_period_end || sub.current_period?.end || null;
+      const currentPeriodEnd = periodEndSec ? new Date(periodEndSec * 1000).toISOString() : null;
+
+      const tierForPrice = id => id===process.env.CASUAL_PRICE_ID ? {tier:'casual',quota:5}
+                               : id===process.env.PRO_PRICE_ID ? {tier:'pro',quota:25}
+                               : {tier:'free',quota:0};
       const m = tierForPrice(priceId);
+
+      console.log('SUB DEBUG', { priceId, periodEndSec, status: sub.status, tier: m.tier });
+
       await supabase.from('profiles').update({
         stripe_subscription_id: sub.id,
         stripe_subscription_status: sub.status,
@@ -55,7 +59,7 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
         subscription_tier: m.tier,
         plan_quota_monthly: m.quota,
         plan_credits_used_month: 0,
-        current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+        current_period_end: currentPeriodEnd,
       }).eq('stripe_customer_id', sub.customer);
     }
 
