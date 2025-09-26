@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const Stripe = require('stripe');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -8,8 +9,66 @@ const PORT = process.env.PORT || 5000;
 // Initialize Stripe with secret key
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// Middleware
-app.use(bodyParser.json());
+// Initialize Supabase client with service role
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+// Request logging middleware
+app.use((req,_res,next)=>{ console.log('REQ', req.method, req.url); next(); });
+
+// Webhook route MUST be before any JSON middleware - uses raw body
+app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Bad signature:', err.message);
+    return res.sendStatus(400);
+  }
+
+  const obj = event.data.object;
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      // client_reference_id should be your Supabase user_id when you create the session
+      await supabase.from('profiles')
+        .update({ stripe_customer_id: obj.customer })
+        .eq('user_id', obj.client_reference_id);
+    }
+
+    if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated') {
+      const priceId = obj.items?.data?.[0]?.price?.id || obj.plan?.id;
+      const tier =
+        priceId === process.env.CASUAL_PRICE_ID ? 'casual' :
+        priceId === process.env.PRO_PRICE_ID    ? 'pro'    : 'free';
+
+      await supabase.from('profiles').update({
+        stripe_subscription_id: obj.id,
+        stripe_subscription_status: obj.status, // 'active','past_due','canceled'...
+        is_subscribed: obj.status === 'active',
+        subscription_tier: obj.status === 'active' ? tier : 'free',
+      }).eq('stripe_customer_id', obj.customer);
+    }
+
+    if (event.type === 'customer.subscription.deleted') {
+      await supabase.from('profiles').update({
+        stripe_subscription_id: null,
+        stripe_subscription_status: 'canceled',
+        is_subscribed: false,
+        subscription_tier: 'free',
+      }).eq('stripe_customer_id', obj.customer);
+    }
+
+    res.sendStatus(200);
+  } catch (e) {
+    console.error('Webhook handler error:', e);
+    res.sendStatus(500);
+  }
+});
+
+// JSON middleware AFTER webhook route
+app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Set cache control headers to prevent caching issues in Replit
@@ -19,9 +78,6 @@ app.use((req, res, next) => {
   res.set('Expires', '0');
   next();
 });
-
-// Request logging middleware
-app.use((req,_res,next)=>{ console.log("REQ", req.method, req.url); next(); });
 
 // Basic route
 app.get('/', (req, res) => {
