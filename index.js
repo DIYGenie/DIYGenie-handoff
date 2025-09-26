@@ -48,6 +48,11 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
     if (event.type.startsWith('customer.subscription.')) {
       const sub = event.data.object;
       const priceId = sub.items?.data?.[0]?.price?.id || sub.items?.data?.[0]?.plan?.id;
+      console.log('SUB MAP', {
+        priceId,
+        CASUAL: process.env.CASUAL_PRICE_ID,
+        PRO: process.env.PRO_PRICE_ID
+      });
       const m = tierForPrice(priceId);
       const periodEndSec = sub.current_period_end || sub.current_period?.end || null;
       const currentPeriodEnd = periodEndSec ? new Date(periodEndSec*1000).toISOString() : null;
