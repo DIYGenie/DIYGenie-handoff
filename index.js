@@ -53,7 +53,9 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
         CASUAL: process.env.CASUAL_PRICE_ID,
         PRO: process.env.PRO_PRICE_ID
       });
-      const m = tierForPrice(priceId);
+      const m = priceId===process.env.PRO_PRICE_ID ? {tier:'pro',quota:25}
+              : priceId===process.env.CASUAL_PRICE_ID ? {tier:'casual',quota:5}
+              : {tier:'free',quota:0};
       const periodEndSec = sub.current_period_end || sub.current_period?.end || null;
       const currentPeriodEnd = periodEndSec ? new Date(periodEndSec*1000).toISOString() : null;
 
