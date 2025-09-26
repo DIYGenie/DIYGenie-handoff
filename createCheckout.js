@@ -3,12 +3,14 @@ const Stripe = require("stripe");
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 (async () => {
+  const usePro = process.argv.includes('--pro');
+  const priceId = usePro ? process.env.PRO_PRICE_ID : process.env.CASUAL_PRICE_ID;
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
-    line_items: [{ price: process.env.CASUAL_PRICE_ID, quantity: 1 }],
-    success_url: "https://example.com/success",
-    cancel_url: "https://example.com/cancel",
-    client_reference_id: process.env.TEST_USER_ID, // <-- Supabase user_id UUID
+    line_items: [{ price: priceId, quantity: 1 }],
+    client_reference_id: process.env.TEST_USER_ID,
+    success_url: 'https://example.com/success',
+    cancel_url: 'https://example.com/cancel'
   });
-  console.log("Checkout URL:", session.url);
+  console.log('Checkout URL:', session.url);
 })();

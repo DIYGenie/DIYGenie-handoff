@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "checkout:casual": "node createCheckout.js",
+    "checkout:pro": "node createCheckout.js --pro",
     "start": "node index.js",
     "dev": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
