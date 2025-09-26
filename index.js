@@ -87,6 +87,7 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
 
 // JSON middleware AFTER webhook route
 app.use(express.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // Entitlements summary
 app.get('/me/entitlements/:uid', async (req, res) => {
@@ -114,7 +115,6 @@ app.post('/use-plan', async (req, res) => {
     return res.status(500).json({ ok:false, error:'server_error' });
   }
 });
-app.use(bodyParser.urlencoded({ extended: true }));
 
 // Set cache control headers to prevent caching issues in Replit
 app.use((req, res, next) => {
