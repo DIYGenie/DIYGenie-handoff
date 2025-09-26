@@ -88,6 +88,18 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
 // JSON middleware AFTER webhook route
 app.use(express.json());
 
+// Entitlements summary
+app.get('/me/entitlements/:uid', async (req, res) => {
+  const uid = req.params.uid;
+  const { data, error } = await supabase.from('profiles').select('*').eq('user_id', uid).single();
+  if (error || !data) return res.status(404).json({ ok:false, error:'not_found' });
+  const tier = data.subscription_tier || 'free';
+  const base = tier==='pro'?25 : tier==='casual'?5 : 2;
+  const quota = data.plan_quota_monthly>0 ? data.plan_quota_monthly : base;
+  const used = data.plan_credits_used_month || 0;
+  return res.json({ ok:true, tier, status:data.stripe_subscription_status, is_subscribed:data.is_subscribed, quota, used, remaining: Math.max(0, quota-used), current_period_end:data.current_period_end });
+});
+
 /* plan/previews credit */
 app.post('/use-plan', async (req, res) => {
   try {
