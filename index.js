@@ -164,14 +164,23 @@ app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) =
     
     if (!req.file) return res.status(400).json({ ok:false, error:"no image" });
 
-    // 1) upload to Supabase (public bucket)
-    const filePath = `uploads/${projectId}-${Date.now()}.jpeg`;
-    const { error: upErr } = await supabase.storage.from(BUCKET).upload(filePath, req.file.buffer, {
-      upsert: true, contentType: req.file.mimetype || "image/jpeg"
-    });
-    if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
+    // upload image buffer to Supabase Storage
+    const fileName = `${projectId}-${Date.now()}.jpeg`;
 
-    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+    const { data: uploadData, error } = await supabase.storage
+      .from("uploads")                  // bucket name only
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype || "image/jpeg",
+        upsert: true,
+      });
+
+    if (error) {
+      console.error("Upload error:", error.message);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+
+    // get public URL
+    const { data: pub } = supabase.storage.from("uploads").getPublicUrl(fileName);
     const input_image_url = pub.publicUrl;
 
     // 2) call Decor8
@@ -190,12 +199,12 @@ app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) =
         scale_factor: 2
       })
     });
-    const data = await r.json();
-    if (!r.ok) return res.status(502).json({ ok:false, error:data?.message || "decor8 failed", data });
+    const decor8Data = await r.json();
+    if (!r.ok) return res.status(502).json({ ok:false, error:decor8Data?.message || "decor8 failed", data: decor8Data });
 
     const preview_url =
-      data.output_image_url || data.result?.url || data.images?.[0]?.url || null;
-    if (!preview_url) return res.status(502).json({ ok:false, error:"no preview_url in response", data });
+      decor8Data.output_image_url || decor8Data.result?.url || decor8Data.images?.[0]?.url || null;
+    if (!preview_url) return res.status(502).json({ ok:false, error:"no preview_url in response", data: decor8Data });
 
     // 3) save both URLs to projects
     const { error: dbErr } = await supabase
