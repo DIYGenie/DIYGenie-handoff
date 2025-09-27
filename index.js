@@ -2,9 +2,11 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const Stripe = require('stripe');
 const { createClient } = require('@supabase/supabase-js');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Initialize Stripe with secret key
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -14,6 +16,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 const PRICE_ID_CASUAL = process.env.CASUAL_PRICE_ID;
 const PRICE_ID_PRO    = process.env.PRO_PRICE_ID;
+const BUCKET = process.env.SUPABASE_BUCKET || "uploads";
+const DECOR8_URL = "https://api.decor8.ai/generate_designs_for_room";
 
 // Helper function for credit gating
 async function checkCredit(user_id, kind='plan') {
@@ -144,6 +148,66 @@ app.post('/generate-preview', async (req,res) => {
   if (!gate.ok) return res.status(gate.code).json(gate.meta);
   // ...call Decor8...
   return res.json({ ok:true, used: gate.meta.used, remaining: gate.meta.remaining });
+});
+
+// Preview generation with image upload and Decor8 integration
+app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const { prompt = "", room_type = "livingroom", design_style = "modern", user_id } = req.body;
+    
+    // Check credit first if user_id provided
+    if (user_id) {
+      const gate = await checkCredit(user_id, 'preview');
+      if (!gate.ok) return res.status(gate.code).json(gate.meta);
+    }
+    
+    if (!req.file) return res.status(400).json({ ok:false, error:"no image" });
+
+    // 1) upload to Supabase (public bucket)
+    const filePath = `uploads/${projectId}-${Date.now()}.jpeg`;
+    const { error: upErr } = await supabase.storage.from(BUCKET).upload(filePath, req.file.buffer, {
+      upsert: true, contentType: req.file.mimetype || "image/jpeg"
+    });
+    if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
+
+    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+    const input_image_url = pub.publicUrl;
+
+    // 2) call Decor8
+    const r = await fetch(DECOR8_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.DECOR8_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        input_image_url,
+        room_type,
+        design_style,
+        num_images: 1,
+        prompt,
+        scale_factor: 2
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(502).json({ ok:false, error:data?.message || "decor8 failed", data });
+
+    const preview_url =
+      data.output_image_url || data.result?.url || data.images?.[0]?.url || null;
+    if (!preview_url) return res.status(502).json({ ok:false, error:"no preview_url in response", data });
+
+    // 3) save both URLs to projects
+    const { error: dbErr } = await supabase
+      .from("projects")
+      .update({ input_image_url, preview_url })
+      .eq("id", projectId);
+    if (dbErr) return res.status(500).json({ ok:false, error: dbErr.message });
+
+    res.json({ ok:true, project_id: projectId, input_image_url, preview_url });
+  } catch (e) {
+    res.status(500).json({ ok:false, error: e.message });
+  }
 });
 
 // Set cache control headers to prevent caching issues in Replit
