@@ -154,7 +154,7 @@ app.post('/generate-preview', async (req,res) => {
 app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) => {
   try {
     const projectId = req.params.id;
-    const { prompt = "", room_type = "livingroom", design_style = "modern", user_id } = req.body;
+    const { user_id } = req.body;
     
     // Check credit first if user_id provided
     if (user_id) {
@@ -164,58 +164,44 @@ app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) =
     
     if (!req.file) return res.status(400).json({ ok:false, error:"no image" });
 
-    // upload image buffer to Supabase Storage
+    // 1) Upload to Supabase
     const fileName = `${projectId}-${Date.now()}.jpeg`;
-
-    const { data: uploadData, error } = await supabase.storage
-      .from("uploads")                  // bucket name only
-      .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype || "image/jpeg",
-        upsert: true,
-      });
-
-    if (error) {
-      console.error("Upload error:", error.message);
-      return res.status(500).json({ ok: false, error: error.message });
-    }
-
-    // get public URL
-    const { data: pub } = supabase.storage.from("uploads").getPublicUrl(fileName);
+    const up = await supabase.storage.from(BUCKET).upload(fileName, req.file.buffer, {
+      contentType: req.file.mimetype || "image/jpeg", upsert: true
+    });
+    if (up.error) return res.status(500).json({ ok:false, error: up.error.message });
+    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(fileName);
     const input_image_url = pub.publicUrl;
 
-    // 2) call Decor8
+    // 2) Call Decor8
     const r = await fetch(DECOR8_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.DECOR8_API_KEY}`,
+        Authorization: `Bearer ${process.env.DECOR8_API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
         input_image_url,
-        room_type,
-        design_style,
+        room_type: req.body.room_type || "livingroom",
+        design_style: req.body.design_style || "modern",
         num_images: 1,
-        prompt,
+        prompt: req.body.prompt || "",
         scale_factor: 2
       })
     });
-    const decor8Data = await r.json();
-    if (!r.ok) return res.status(502).json({ ok:false, error:decor8Data?.message || "decor8 failed", data: decor8Data });
+    const dj = await r.json();
+    if (!r.ok) return res.status(502).json({ ok:false, error:dj?.message || "decor8 failed", data:dj });
 
-    const preview_url =
-      decor8Data.output_image_url || decor8Data.result?.url || decor8Data.images?.[0]?.url || null;
-    if (!preview_url) return res.status(502).json({ ok:false, error:"no preview_url in response", data: decor8Data });
+    const preview_url = dj.output_image_url || dj.result?.url || dj.images?.[0]?.url;
+    if (!preview_url) return res.status(502).json({ ok:false, error:"no preview_url", data:dj });
 
-    // 3) save both URLs to projects
-    const { error: dbErr } = await supabase
-      .from("projects")
-      .update({ input_image_url, preview_url })
-      .eq("id", projectId);
-    if (dbErr) return res.status(500).json({ ok:false, error: dbErr.message });
+    // 3) Save to DB
+    const upd = await supabase.from("projects").update({ input_image_url, preview_url }).eq("id", projectId);
+    if (upd.error) return res.status(500).json({ ok:false, error: upd.error.message });
 
     res.json({ ok:true, project_id: projectId, input_image_url, preview_url });
   } catch (e) {
-    res.status(500).json({ ok:false, error: e.message });
+    res.status(500).json({ ok:false, error:e.message });
   }
 });
 
