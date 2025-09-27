@@ -165,7 +165,7 @@ app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) =
     if (!req.file) return res.status(400).json({ ok:false, error:"no image" });
 
     // 1) Upload to Supabase
-    const fileName = `${projectId}-${Date.now()}.jpeg`;
+    const fileName = projectId + "-" + Date.now() + ".jpeg";
     const up = await supabase.storage.from(BUCKET).upload(fileName, req.file.buffer, {
       contentType: req.file.mimetype || "image/jpeg", upsert: true
     });
