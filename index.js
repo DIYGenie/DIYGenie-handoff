@@ -216,6 +216,17 @@ app.post('/api/projects/:id/preview', async (req, res) => {
   }
 });
 
+// Build without preview
+app.patch('/api/projects/:id/build_without_preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('projects').update({ status:'plan_ready' }).eq('id', id);
+    res.json({ ok:true });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:'server_error' });
+  }
+});
+
 // Set cache control headers to prevent caching issues in Replit
 app.use((req, res, next) => {
   res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
