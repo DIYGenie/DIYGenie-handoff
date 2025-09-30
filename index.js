@@ -1,18 +1,23 @@
+const cors = require('cors');
 const express = require('express');
-const bodyParser = require('body-parser');
-const Stripe = require('stripe');
 const { createClient } = require('@supabase/supabase-js');
-const multer = require('multer');
 
 const app = express();
+app.use(cors({ origin: true, credentials: false }));
+app.use(express.json());
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, { auth: { persistSession: false } });
+
+const Stripe = require('stripe');
+const multer = require('multer');
+
 const PORT = process.env.PORT || 5000;
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Initialize Stripe with secret key
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
-// Initialize Supabase client with service role
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const PRICE_ID_CASUAL = process.env.CASUAL_PRICE_ID;
 const PRICE_ID_PRO    = process.env.PRO_PRICE_ID;
@@ -98,10 +103,6 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
     res.sendStatus(500);
   }
 });
-
-// JSON middleware AFTER webhook route
-app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true }));
 
 // Entitlements summary
 app.get('/me/entitlements/:uid', async (req, res) => {
