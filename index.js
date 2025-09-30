@@ -187,9 +187,10 @@ app.post('/api/projects', async (req, res) => {
 
 // Get single project by ID
 app.get('/api/projects/:id', async (req, res) => {
-  const { data, error } = await supabase.from('projects').select('*').eq('id', req.params.id).single();
-  if (error) return res.status(404).json({ ok:false, error:'not_found' });
-  res.json({ ok:true, item:data });
+  const { id } = req.params;
+  const { data, error } = await supabase.from('projects').select('*').eq('id', id).single();
+  if (error) return res.status(500).json({ ok:false, error: String(error.message || error) });
+  res.json({ ok:true, item: data });
 });
 
 // --- Generate preview (alias both paths just in case the app calls either) ---
