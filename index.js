@@ -150,6 +150,21 @@ app.post('/generate-preview', async (req,res) => {
   return res.json({ ok:true, used: gate.meta.used, remaining: gate.meta.remaining });
 });
 
+// List projects for a user
+app.get('/api/projects', async (req, res) => {
+  const { user_id } = req.query;
+  if (!user_id) return res.status(400).json({ ok:false, error:'missing_user_id' });
+
+  const { data, error } = await supabase
+    .from('projects')
+    .select('*')
+    .eq('user_id', user_id)
+    .order('created_at', { ascending:false });
+
+  if (error) return res.status(500).json({ ok:false, error:'db_error' });
+  res.json({ ok:true, items:data });
+});
+
 // Create new project
 app.post('/api/projects', async (req, res) => {
   try {
@@ -168,6 +183,13 @@ app.post('/api/projects', async (req, res) => {
     console.error(e);
     res.status(500).json({ ok:false, error:'server_error' });
   }
+});
+
+// Get single project by ID
+app.get('/api/projects/:id', async (req, res) => {
+  const { data, error } = await supabase.from('projects').select('*').eq('id', req.params.id).single();
+  if (error) return res.status(404).json({ ok:false, error:'not_found' });
+  res.json({ ok:true, item:data });
 });
 
 // Request a preview
