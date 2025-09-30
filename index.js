@@ -170,58 +170,27 @@ app.post('/api/projects', async (req, res) => {
   }
 });
 
-// Preview generation with image upload and Decor8 integration
-app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) => {
+// Request a preview
+app.post('/api/projects/:id/preview', async (req, res) => {
+  const { id } = req.params;
   try {
-    const projectId = req.params.id;
-    const { user_id } = req.body;
-    
-    // Check credit first if user_id provided
-    if (user_id) {
-      const gate = await checkCredit(user_id, 'preview');
-      if (!gate.ok) return res.status(gate.code).json(gate.meta);
-    }
-    
-    if (!req.file) return res.status(400).json({ ok:false, error:"no image" });
+    // mark requested
+    await supabase.from('projects').update({ status:'preview_requested' }).eq('id', id);
 
-    // 1) Upload to Supabase
-    const fileName = projectId + "-" + Date.now() + ".jpeg";
-    const up = await supabase.storage.from(BUCKET).upload(fileName, req.file.buffer, {
-      contentType: req.file.mimetype || "image/jpeg", upsert: true
-    });
-    if (up.error) return res.status(500).json({ ok:false, error: up.error.message });
-    const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(fileName);
-    const input_image_url = pub.publicUrl;
+    // dev-only: fake background job → ready in ~6s
+    setTimeout(async () => {
+      await supabase.from('projects')
+        .update({
+          status: 'preview_ready',
+          preview_url: `https://picsum.photos/seed/${id}/1200/800`
+        })
+        .eq('id', id);
+    }, 6000);
 
-    // 2) Call Decor8
-    const r = await fetch(DECOR8_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.DECOR8_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        input_image_url,
-        room_type: req.body.room_type || "livingroom",
-        design_style: req.body.design_style || "modern",
-        num_images: 1,
-        prompt: req.body.prompt || "",
-        scale_factor: 2
-      })
-    });
-    const dj = await r.json();
-    if (!r.ok) return res.status(502).json({ ok:false, error:dj?.message || "decor8 failed", data:dj });
-
-    const preview_url = dj.output_image_url || dj.result?.url || dj.images?.[0]?.url;
-    if (!preview_url) return res.status(502).json({ ok:false, error:"no preview_url", data:dj });
-
-    // 3) Save to DB
-    const upd = await supabase.from("projects").update({ input_image_url, preview_url }).eq("id", projectId);
-    if (upd.error) return res.status(500).json({ ok:false, error: upd.error.message });
-
-    res.json({ ok:true, project_id: projectId, input_image_url, preview_url });
+    res.json({ ok:true });
   } catch (e) {
-    res.status(500).json({ ok:false, error:e.message });
+    console.error(e);
+    res.status(500).json({ ok:false, error:'server_error' });
   }
 });
 
