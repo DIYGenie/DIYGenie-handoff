@@ -25,6 +25,79 @@ const UPLOADS_BUCKET = process.env.EXPO_PUBLIC_UPLOADS_BUCKET || "uploads";
 // Dev user the app uses in preview
 const DEV_USER = '00000000-0000-0000-0000-000000000001';
 
+// --- ENTITLEMENTS CONFIG ---
+const TIER_RULES = {
+  free:   { quota: 2,  preview: false },
+  casual: { quota: 5,  preview: true  },
+  pro:    { quota: 25, preview: true  },
+};
+
+async function getEntitlements(supabase, userId) {
+  // Get tier from profiles
+  const { data: prof, error: profErr } = await supabase
+    .from('profiles')
+    .select('plan_tier')
+    .eq('user_id', userId)
+    .single();
+
+  if (profErr && profErr.code !== 'PGRST116') {
+    // return something sane if RLS or lookup issues
+    return { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
+  }
+
+  const tier = (prof && prof.plan_tier) || 'free';
+  const rules = TIER_RULES[tier] || TIER_RULES.free;
+
+  // Count user's projects
+  const { count } = await supabase
+    .from('projects')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId);
+
+  const used = count || 0;
+  const remaining = Math.max(0, rules.quota - used);
+
+  return {
+    tier,
+    quota: rules.quota,
+    previewAllowed: !!rules.preview,
+    remaining
+  };
+}
+
+// Simple guards
+async function requireQuota(req, res, next) {
+  try {
+    const userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id; // be tolerant
+    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+
+    const ent = await getEntitlements(supabase, userId);
+    if (ent.remaining <= 0) return res.status(403).json({ ok:false, error:'quota_exhausted', entitlements: ent });
+
+    req.entitlements = ent;
+    req.user_id = userId;
+    next();
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
+  }
+}
+
+async function requirePreviewAllowed(req, res, next) {
+  try {
+    const userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id;
+    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+
+    const ent = await getEntitlements(supabase, userId);
+    if (!ent.previewAllowed) return res.status(403).json({ ok:false, error:'preview_not_in_plan', entitlements: ent });
+
+    req.entitlements = ent;
+    req.user_id = userId;
+    next();
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
+  }
+}
+
 // --- Decor8 helpers ----------------------------------------------------------
 const DECOR8_BASE_URL = process.env.DECOR8_BASE_URL || 'https://api.decor8.ai';
 const DECOR8_API_KEY  = process.env.DECOR8_API_KEY;
@@ -69,13 +142,28 @@ app.get('/', (req, res) => res.json({
   base: 'v1'
 }));
 
-// --- Entitlements (stub for Free/Casual/Pro gating) ---
-function entitlementsHandler(req, res) {
-  // Return a consistent shape the app expects
-  res.json({ ok: true, tier: 'Free', remaining: 5, quota: 5 });
-}
-app.get('/api/me/entitlements/:user_id', entitlementsHandler);
-app.get('/me/entitlements/:user_id', entitlementsHandler);
+// --- Entitlements endpoint ---
+// GET /me/entitlements/:userId
+app.get('/me/entitlements/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+    const ent = await getEntitlements(supabase, userId);
+    res.json({ ok:true, ...ent });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
+  }
+});
+app.get('/api/me/entitlements/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+    const ent = await getEntitlements(supabase, userId);
+    res.json({ ok:true, ...ent });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
+  }
+});
 
 // --- Helpers ---
 const picsum = seed => `https://picsum.photos/seed/${encodeURIComponent(seed)}/1200/800`;
@@ -114,7 +202,7 @@ app.get('/api/projects/:id', async (req, res) => {
 });
 
 // --- Projects: CREATE ---
-app.post('/api/projects', async (req, res) => {
+app.post('/api/projects', requireQuota, async (req, res) => {
   try {
     const { user_id, name, input_image_url } = req.body || {};
     const insert = {
@@ -169,7 +257,7 @@ app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
 
 // --- Preview generation route ------------------------------------------------
 // POST /api/projects/:id/preview
-app.post('/api/projects/:id/preview', async (req, res) => {
+app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -224,7 +312,7 @@ app.post('/api/projects/:id/preview', async (req, res) => {
 
 // --- Build without preview route --------------------------------------------
 // POST /api/projects/:id/build-without-preview
-app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, res) => {
   try {
     const { id } = req.params;
 
