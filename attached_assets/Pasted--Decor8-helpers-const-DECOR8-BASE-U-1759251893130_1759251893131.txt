@@ -1,0 +1,108 @@
+// --- Decor8 helpers ----------------------------------------------------------
+const DECOR8_BASE_URL = process.env.DECOR8_BASE_URL || 'https://api.decor8.ai';
+const DECOR8_API_KEY  = process.env.DECOR8_API_KEY;
+
+async function callDecor8Generate({ input_image_url, room_type, design_style }) {
+  // Minimal, known-good body. Add optional fields later.
+  const body = {
+    input_image_url,           // MUST be a public URL
+    room_type,                 // e.g. "livingroom"
+    design_style,              // e.g. "minimalist"
+    num_images: 1
+  };
+
+  const res = await fetch(`${DECOR8_BASE_URL}/generate_designs_for_room`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${DECOR8_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || `Decor8 ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data; // expected: { error: "", message: "...", info: { images: [...] } }
+}
+
+// --- Preview generation route ------------------------------------------------
+// POST /api/projects/:id/preview
+app.post('/api/projects/:id/preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1) Load project (we expect columns: input_image_url, room_type, design_style)
+    const { data: project, error: pErr } = await supabase
+      .from('projects')
+      .select('id, input_image_url, room_type, design_style')
+      .eq('id', id)
+      .single();
+
+    if (pErr || !project) {
+      return res.status(404).json({ ok:false, error: 'project_not_found' });
+    }
+    if (!project.input_image_url) {
+      return res.status(422).json({ ok:false, error: 'missing_input_image_url' });
+    }
+
+    // 2) Mark preview requested
+    await supabase.from('projects')
+      .update({ status: 'preview_requested' })
+      .eq('id', id);
+
+    // 3) Call Decor8
+    const deco = await callDecor8Generate({
+      input_image_url: project.input_image_url,
+      room_type: project.room_type || 'livingroom',
+      design_style: project.design_style || 'minimalist',
+    });
+
+    // 4) Pull first image URL and save
+    const preview_url = deco?.info?.images?.[0] || null;
+
+    await supabase.from('projects')
+      .update({
+        status: preview_url ? 'preview_ready' : 'preview_failed',
+        preview_url
+      })
+      .eq('id', id);
+
+    return res.json({ ok:true, status: preview_url ? 'preview_ready' : 'preview_failed', preview_url, deco });
+  } catch (err) {
+    console.error('[Decor8] error:', err.status, err.message, err.data || '');
+    return res.status(502).json({
+      ok:false,
+      error: 'decor8_failed',
+      detail: err.message,
+      provider_status: err.status || 500,
+      provider: 'decor8'
+    });
+  }
+});
+
+// --- Build without preview route --------------------------------------------
+// POST /api/projects/:id/build-without-preview
+app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Example: mark requested. You’ll hook this into your plan generator next.
+    await supabase.from('projects')
+      .update({ status: 'plan_requested' })
+      .eq('id', id);
+
+    return res.json({ ok:true, status:'plan_requested' });
+  } catch (err) {
+    console.error('[build-without-preview] error:', err);
+    return res.status(500).json({ ok:false, error:'build_without_preview_failed' });
+  }
+});
