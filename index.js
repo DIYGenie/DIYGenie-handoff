@@ -192,28 +192,36 @@ app.get('/api/projects/:id', async (req, res) => {
   res.json({ ok:true, item:data });
 });
 
-// start preview, then auto-complete after a few seconds
-app.post('/api/projects/:id/preview', async (req, res) => {
-  const { id } = req.params;
-
-  // mark as in progress immediately
-  await supabase.from('projects')
-    .update({ status: 'preview_in_progress' })
+// --- Generate preview (alias both paths just in case the app calls either) ---
+async function markReady(id) {
+  const { error } = await supabase
+    .from('projects')
+    .update({
+      status: 'preview_ready',
+      preview_url: 'https://placehold.co/1200x800/png?text=DIY+Genie+Preview'
+    })
     .eq('id', id);
+  if (error) console.error('[PREVIEW][update->ready] error:', error);
+}
 
-  // fake "generation" then mark ready
-  setTimeout(async () => {
-    await supabase.from('projects')
-      .update({
-        status: 'preview_ready',
-        // any public image works; swap later for real output
-        preview_url: 'https://placehold.co/1200x800/png?text=DIY+Genie+Preview'
-      })
+for (const path of ['/api/projects/:id/preview', '/api/projects/:id/request_preview']) {
+  app.post(path, async (req, res) => {
+    const { id } = req.params;
+    console.log('[PREVIEW] request for project:', id, 'path:', path);
+
+    // mark "in progress" (log any failure so we see RLS or other issues)
+    const { error } = await supabase
+      .from('projects')
+      .update({ status: 'preview_in_progress' })
       .eq('id', id);
-  }, 5000);
+    if (error) console.error('[PREVIEW][update->in_progress] error:', error);
 
-  res.json({ ok: true });
-});
+    // ⬅️ TEMP: finish immediately so UI stops spinning
+    await markReady(id);
+
+    res.json({ ok: true });
+  });
+}
 
 // Build without preview
 app.patch('/api/projects/:id/build_without_preview', async (req, res) => {
