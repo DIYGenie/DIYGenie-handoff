@@ -259,8 +259,7 @@ app.get ('/api/projects/:id/preview',  startPreview); // optional
 app.post('/api/projects/:id/force-ready', forceReady);
 app.get ('/api/projects/:id/force-ready',  forceReady); // optional
 
-// --- FORCE READY ALL (bulk unstick) ---
-// GET /api/projects/force-ready-all?user_id=<uuid>   (user_id optional)
+// --- FORCE READY ALL PREVIEWS ---
 app.get('/api/projects/force-ready-all', async (req, res) => {
   try {
     const { user_id } = req.query;
@@ -271,12 +270,9 @@ app.get('/api/projects/force-ready-all', async (req, res) => {
         preview_url: `https://picsum.photos/seed/bulk-${Date.now()}/1200/800`,
       })
       .eq('status', 'preview_requested');
-
     if (user_id) q = q.eq('user_id', user_id);
-
     const { error } = await q;
     if (error) throw error;
-
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
