@@ -4,7 +4,7 @@ import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
