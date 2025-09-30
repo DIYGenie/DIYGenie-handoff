@@ -150,6 +150,26 @@ app.post('/generate-preview', async (req,res) => {
   return res.json({ ok:true, used: gate.meta.used, remaining: gate.meta.remaining });
 });
 
+// Create new project
+app.post('/api/projects', async (req, res) => {
+  try {
+    const { user_id, name, input_image_url } = req.body;
+    if (!user_id || !name) return res.status(400).json({ ok:false, error:'missing_fields' });
+
+    const { data, error } = await supabase
+      .from('projects')
+      .insert([{ user_id, name, status: 'new', input_image_url }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ ok:true, item: data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok:false, error:'server_error' });
+  }
+});
+
 // Preview generation with image upload and Decor8 integration
 app.post("/api/projects/:id/preview", upload.single("image"), async (req, res) => {
   try {
