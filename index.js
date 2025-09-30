@@ -192,28 +192,27 @@ app.get('/api/projects/:id', async (req, res) => {
   res.json({ ok:true, item:data });
 });
 
-// Request a preview
+// start preview, then auto-complete after a few seconds
 app.post('/api/projects/:id/preview', async (req, res) => {
   const { id } = req.params;
-  try {
-    // mark requested
-    await supabase.from('projects').update({ status:'preview_requested' }).eq('id', id);
 
-    // dev-only: fake background job → ready in ~6s
-    setTimeout(async () => {
-      await supabase.from('projects')
-        .update({
-          status: 'preview_ready',
-          preview_url: `https://picsum.photos/seed/${id}/1200/800`
-        })
-        .eq('id', id);
-    }, 6000);
+  // mark as in progress immediately
+  await supabase.from('projects')
+    .update({ status: 'preview_in_progress' })
+    .eq('id', id);
 
-    res.json({ ok:true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok:false, error:'server_error' });
-  }
+  // fake "generation" then mark ready
+  setTimeout(async () => {
+    await supabase.from('projects')
+      .update({
+        status: 'preview_ready',
+        // any public image works; swap later for real output
+        preview_url: 'https://placehold.co/1200x800/png?text=DIY+Genie+Preview'
+      })
+      .eq('id', id);
+  }, 5000);
+
+  res.json({ ok: true });
 });
 
 // Build without preview
