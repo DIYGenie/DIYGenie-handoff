@@ -122,13 +122,12 @@ app.post('/webhook', express.raw({ type:'application/json' }), async (req, res) 
   }
 });
 
-// --- ENTITLEMENTS (Free tier stub) ---
+// --- ENTITLEMENTS (dev stub) ---
 function entitlementsHandler(req, res) {
-  // you can ignore user_id here for now
   res.json({ ok: true, tier: 'Free', quota: 5, remaining: 5 });
 }
 
-// Support both with and without /api and with query or param
+// Support both with and without /api and with/without :user_id
 app.get('/me/entitlements/:user_id', entitlementsHandler);
 app.get('/api/me/entitlements/:user_id', entitlementsHandler);
 app.get('/me/entitlements', entitlementsHandler);
