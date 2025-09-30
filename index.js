@@ -1,31 +1,20 @@
-// diy-genie-webhooks/index.js
-const express = require('express');
-const cors = require('cors');
-const bodyParser = require('body-parser');
-const { createClient } = require('@supabase/supabase-js');
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import { createClient } from "@supabase/supabase-js";
 
 const app = express();
-app.use(bodyParser.json({ limit: '10mb' }));
+app.use(cors());
+app.use(express.json());
 
-// --- CORS (dev-wide) ---
-app.use(cors({
-  origin: (o, cb) => cb(null, true),
-  methods: ['GET','POST','PATCH','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
-}));
-app.use((req,res,next)=>{
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Vary','Origin');
-  res.header('Access-Control-Allow-Methods','GET,POST,PATCH,OPTIONS');
-  res.header('Access-Control-Allow-Headers','Content-Type, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
+const upload = multer({ storage: multer.memoryStorage() });
 
-// --- ENV / Supabase ---
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY   // service key (bypasses RLS for server)
+);
+
+const UPLOADS_BUCKET = process.env.EXPO_PUBLIC_UPLOADS_BUCKET || "uploads";
 
 // Dev user the app uses in preview
 const DEV_USER = '00000000-0000-0000-0000-000000000001';
