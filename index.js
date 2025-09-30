@@ -93,6 +93,39 @@ app.post('/api/projects', async (req, res) => {
   }
 });
 
+// POST /api/projects/:id/image  (field name: "file")
+app.post("/api/projects/:id/image", upload.single("file"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) return res.status(400).json({ ok: false, error: "missing_file" });
+
+    const ext = (req.file.mimetype?.split("/")[1] || "jpg").toLowerCase();
+    const path = `projects/${id}/${Date.now()}.${ext}`;
+
+    const { error: upErr } = await supabase
+      .storage
+      .from(UPLOADS_BUCKET)
+      .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+
+    if (upErr) return res.status(500).json({ ok: false, error: String(upErr.message || upErr) });
+
+    const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
+    const publicUrl = pub?.publicUrl;
+
+    // Update the project row so the app can show the image & kick off preview
+    const { error: dbErr } = await supabase
+      .from("projects")
+      .update({ input_image_url: publicUrl, status: "preview_requested" })
+      .eq("id", id);
+
+    if (dbErr) return res.status(500).json({ ok: false, error: String(dbErr.message || dbErr) });
+
+    return res.json({ ok: true, url: publicUrl });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // --- Projects: REQUEST PREVIEW (kick off) ---
 app.post('/api/projects/:id/preview', async (req, res) => {
   try {
