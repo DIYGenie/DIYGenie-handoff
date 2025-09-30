@@ -151,6 +151,26 @@ app.post('/api/projects/:id/preview', async (req, res) => {
   }
 });
 
+// --- Build plan without preview --------------------------------------------
+app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // mark the project as moving forward without preview
+    const { data, error } = await supabase
+      .from('projects')
+      .update({ status: 'in_progress' }) // or 'plan_ready' if you prefer
+      .eq('id', id)
+      .select('id, name, status, input_image_url, preview_url')
+      .single();
+
+    if (error) throw error;
+    return res.json({ ok: true, project: data });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err.message || err) });
+  }
+});
+
 // --- Utilities to unstick states ---
 app.get('/api/projects/force-ready-all', async (req, res) => {
   try {
