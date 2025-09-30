@@ -383,6 +383,7 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
     (async () => {
       try {
         let preview_url = project.input_image_url; // Default fallback
+        let useStubDelay = false;
 
         if (PREVIEW_PROVIDER === 'decor8' && DECOR8_API_KEY) {
           try {
@@ -399,12 +400,16 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
               console.log(`[Preview] Decor8 success for ${id}: ${preview_url}`);
             }
           } catch (decor8Err) {
-            console.error(`[Preview] Decor8 failed for ${id}, using stub:`, decor8Err.message);
-            // Fall through to stub
+            console.error(`[Preview] Decor8 failed for ${id}, falling back to stub:`, decor8Err.message);
+            useStubDelay = true;
           }
         } else {
           console.log(`[Preview] Using stub for ${id} (provider: ${PREVIEW_PROVIDER})`);
-          // Stub: wait 5s before completion
+          useStubDelay = true;
+        }
+
+        // Apply stub delay for fallback or stub mode
+        if (useStubDelay) {
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
 
@@ -462,6 +467,7 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
     (async () => {
       try {
         let planData = null;
+        let useStubDelay = false;
 
         if (PLAN_PROVIDER === 'openai' && OPENAI_API_KEY) {
           try {
@@ -473,12 +479,16 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
             });
             console.log(`[Plan] OpenAI success for ${id}`);
           } catch (openaiErr) {
-            console.error(`[Plan] OpenAI failed for ${id}, using stub:`, openaiErr.message);
-            // Fall through to stub
+            console.error(`[Plan] OpenAI failed for ${id}, falling back to stub:`, openaiErr.message);
+            useStubDelay = true;
           }
         } else {
           console.log(`[Plan] Using stub for ${id} (provider: ${PLAN_PROVIDER})`);
-          // Stub: wait 1.5s before completion
+          useStubDelay = true;
+        }
+
+        // Apply stub delay for fallback or stub mode
+        if (useStubDelay) {
           await new Promise(resolve => setTimeout(resolve, 1500));
         }
 
@@ -505,6 +515,21 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
   } catch (err) {
     console.error('[build-without-preview] error:', err);
     return res.status(500).json({ ok:false, error:'build_without_preview_failed' });
+  }
+});
+
+// --- Projects: DELETE ---
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok:false, error: String(e.message || e) });
   }
 });
 

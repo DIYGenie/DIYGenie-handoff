@@ -52,7 +52,22 @@ try {
   devUserId = testUserId;
   initialRemaining = entData.remaining;
   console.log(`✓ Dev user: ${devUserId}`);
-  console.log(`  Tier: ${entData.tier}, Quota: ${entData.quota}, Remaining: ${entData.remaining}, Preview: ${entData.previewAllowed}\n`);
+  console.log(`  Tier: ${entData.tier}, Quota: ${entData.quota}, Remaining: ${entData.remaining}, Preview: ${entData.previewAllowed}`);
+  
+  // Clean up old test projects if quota exhausted
+  if (entData.remaining === 0) {
+    console.log('  Quota exhausted - cleaning up old test projects...');
+    const { data: projectsData } = await request('GET', `/api/projects?user_id=${devUserId}`);
+    if (projectsData.ok && projectsData.items && projectsData.items.length > 0) {
+      console.log(`  Found ${projectsData.items.length} projects - deleting...`);
+      for (const proj of projectsData.items) {
+        const deleteUrl = `${API_BASE}/api/projects/${proj.id}`;
+        await fetch(deleteUrl, { method: 'DELETE' });
+      }
+      console.log(`  ✓ Deleted ${projectsData.items.length} projects`);
+    }
+  }
+  console.log('');
 
   // STEP 2: Create project
   console.log('[STEP 2] Create project...');
