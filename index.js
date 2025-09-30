@@ -368,7 +368,6 @@ app.get('/create-checkout', async (req, res) => {
   }
 });
 
-// Start server - bind to all hosts for Replit compatibility
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running on http://0.0.0.0:${PORT}`);
-});
+app.listen(process.env.PORT || 5000, '0.0.0.0', () =>
+  console.log('Server running')
+);
