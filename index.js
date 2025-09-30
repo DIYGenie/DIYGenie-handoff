@@ -7,6 +7,12 @@ const app = express();
 app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
 app.use(express.json());
 
+// Request logging
+app.use((req, res, next) => {
+  console.log('[REQ]', req.method, req.path);
+  next();
+});
+
 const upload = multer({ storage: multer.memoryStorage() });
 
 const supabase = createClient(
@@ -78,7 +84,7 @@ app.post('/api/projects', async (req, res) => {
     const insert = {
       user_id: user_id || '00000000-0000-0000-0000-000000000001',
       name: name || 'Untitled',
-      status: 'new',
+      status: 'draft',
       input_image_url: input_image_url || null,
       preview_url: null,
     };
@@ -113,7 +119,7 @@ app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
 
     const { data, error: dbErr } = await supabase
       .from('projects')
-      .update({ input_image_url: publicUrl, status: 'preview_requested' })
+      .update({ input_image_url: publicUrl })
       .eq('id', id)
       .select('id, user_id, name, status, input_image_url, preview_url')
       .single();
@@ -129,66 +135,42 @@ app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
 app.post('/api/projects/:id/preview', async (req, res) => {
   try {
     const { id } = req.params;
-    // mark requested
-    let { error } = await supabase
-      .from('projects')
+    const up = await supabase.from('projects')
       .update({ status: 'preview_requested' })
       .eq('id', id);
-    if (error) throw error;
+    if (up.error) throw up.error;
 
-    // simulate generation: flip to ready after 6s
+    res.json({ ok: true });
+
+    // dev-only fake generation
     setTimeout(async () => {
-      await supabase
-        .from('projects')
-        .update({ status: 'preview_ready', preview_url: picsum(id) })
+      const { data: row } = await supabase.from('projects').select('input_image_url').eq('id', id).single();
+      await supabase.from('projects')
+        .update({
+          status: 'preview_ready',
+          preview_url: row?.input_image_url || 'https://picsum.photos/800/500'
+        })
         .eq('id', id);
-    }, 6000);
-
-    res.json({ ok: true, id, status: 'preview_requested' });
-  } catch (e) {
-    res.status(500).json({ ok:false, error: String(e.message || e) });
+    }, 5000);
+  } catch (err) {
+    res.status(500).json({ ok:false, error: String(err.message || err) });
   }
 });
 
-// ---- Build plan WITHOUT preview ----
-// POST /api/projects/:id/build-without-preview
+// build-without-preview (NEW)
 app.post('/api/projects/:id/build-without-preview', async (req, res) => {
-  const { id } = req.params;
-
   try {
-    // (Optional) you can pull other fields out of req.body if you want
-    // const { user_id, description, budget, skill_level } = req.body;
-
-    // Mark plan as ready (no AI image preview step)
+    const { id } = req.params;
     const { data, error } = await supabase
       .from('projects')
-      .update({
-        status: 'plan_ready',
-        updated_at: new Date().toISOString(),
-      })
+      .update({ status: 'planning' })
       .eq('id', id)
       .select()
       .single();
-
     if (error) throw error;
-
-    // Return a simple placeholder "plan" so the UI can continue
-    res.json({
-      ok: true,
-      project: data,
-      plan: {
-        summary: 'Plan generated without AI preview.',
-        steps: [
-          { title: 'Measure & mark', minutes: 10 },
-          { title: 'Find studs', minutes: 10 },
-          { title: 'Drill anchors', minutes: 15 },
-          { title: 'Mount shelves', minutes: 20 },
-        ],
-      },
-    });
+    res.json({ ok: true, project: data, plan: { steps: [], materials: [] } });
   } catch (err) {
-    console.error('build-without-preview error:', err);
-    res.status(500).json({ ok: false, error: String(err.message || err) });
+    res.status(500).json({ ok:false, error: String(err.message || err) });
   }
 });
 

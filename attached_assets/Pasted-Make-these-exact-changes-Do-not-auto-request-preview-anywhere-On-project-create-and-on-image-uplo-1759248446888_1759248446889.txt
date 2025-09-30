@@ -1,0 +1,83 @@
+Make these exact changes:
+
+Do not auto-request preview anywhere. On project create and on image upload, leave status as 'draft'.
+
+Add these endpoints (Express):
+
+POST /api/projects/:id/preview
+Sets status = 'preview_requested', responds {ok:true}.
+For dev, schedule a setTimeout(5000) that updates the same row to
+status='preview_ready' and sets preview_url = COALESCE(input_image_url, 'https://picsum.photos/800/500').
+
+POST /api/projects/:id/build-without-preview (NEW – this is the 404)
+Updates the row to status='planning', returns { ok:true, project, plan: { steps: [], materials: [] } }.
+
+POST /api/projects/:id/image
+Accepts multipart/form-data, uploads the file to Supabase Storage or your existing approach, saves the public URL to input_image_url. Do not modify status here.
+
+GET /api/projects?user_id=...
+Returns { ok:true, items:[{ id, name, status, budget, skill_level, input_image_url, preview_url }] }.
+
+GET /api/projects/:id
+Returns the single project row; include status, input_image_url, preview_url.
+
+All endpoints must return JSON on success and on error:
+
+success: res.json({ ok:true, ... })
+
+failure: res.status(500).json({ ok:false, error: err.message })
+
+Add request logging: console.log('[REQ]', req.method, req.path);
+
+Leave existing CORS as is. No changes to /health.
+
+After edits, restart the server and verify:
+
+POST /api/projects/:id/build-without-preview exists and returns {ok:true}.
+
+POST /api/projects/:id/preview flips status with the 5s dev timer.
+
+Example code blocks to include in index.js (or server entry):
+
+// build-without-preview (NEW)
+app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('projects')
+      .update({ status: 'planning' })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ ok: true, project: data, plan: { steps: [], materials: [] } });
+  } catch (err) {
+    res.status(500).json({ ok:false, error: String(err.message || err) });
+  }
+});
+
+// preview (no auto-start elsewhere)
+app.post('/api/projects/:id/preview', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const up = await supabase.from('projects')
+      .update({ status: 'preview_requested' })
+      .eq('id', id);
+    if (up.error) throw up.error;
+
+    res.json({ ok: true });
+
+    // dev-only fake generation
+    setTimeout(async () => {
+      const { data: row } = await supabase.from('projects').select('input_image_url').eq('id', id).single();
+      await supabase.from('projects')
+        .update({
+          status: 'preview_ready',
+          preview_url: row?.input_image_url || 'https://picsum.photos/800/500'
+        })
+        .eq('id', id);
+    }, 5000);
+  } catch (err) {
+    res.status(500).json({ ok:false, error: String(err.message || err) });
+  }
+});
