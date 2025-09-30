@@ -74,55 +74,54 @@ app.get('/api/projects/:id', async (req, res) => {
 // --- Projects: CREATE ---
 app.post('/api/projects', async (req, res) => {
   try {
-    const { name, budget, skill_level, input_image_url, user_id } = req.body || {};
-    const uid = user_id || DEV_USER;
+    const { user_id, name, input_image_url } = req.body || {};
     const insert = {
-      user_id: uid,
+      user_id: user_id || '00000000-0000-0000-0000-000000000001',
       name: name || 'Untitled',
       status: 'new',
       input_image_url: input_image_url || null,
       preview_url: null,
-      budget: budget || null,
-      skill_level: skill_level || null,
     };
-    const { data, error } = await supabase.from('projects').insert(insert).select('id').single();
-    if (error) throw error;
-    res.json({ ok: true, id: data.id });
+    const { data, error } = await supabase
+      .from('projects')
+      .insert(insert)
+      .select('id, user_id, name, status, input_image_url, preview_url')
+      .single();
+    if (error) return res.status(500).json({ ok:false, error: error.message });
+    return res.json({ ok:true, item: data });
   } catch (e) {
-    res.status(500).json({ ok:false, error: String(e.message || e) });
+    return res.status(500).json({ ok:false, error: String(e.message || e) });
   }
 });
 
 // POST /api/projects/:id/image  (field name: "file")
-app.post("/api/projects/:id/image", upload.single("file"), async (req, res) => {
+app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
-    if (!req.file) return res.status(400).json({ ok: false, error: "missing_file" });
+    if (!req.file) return res.status(400).json({ ok:false, error:'missing_file' });
 
-    const ext = (req.file.mimetype?.split("/")[1] || "jpg").toLowerCase();
+    const ext = (req.file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
     const path = `projects/${id}/${Date.now()}.${ext}`;
 
     const { error: upErr } = await supabase
-      .storage
-      .from(UPLOADS_BUCKET)
+      .storage.from(UPLOADS_BUCKET)
       .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
-
-    if (upErr) return res.status(500).json({ ok: false, error: String(upErr.message || upErr) });
+    if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
 
     const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
     const publicUrl = pub?.publicUrl;
 
-    // Update the project row so the app can show the image & kick off preview
-    const { error: dbErr } = await supabase
-      .from("projects")
-      .update({ input_image_url: publicUrl, status: "preview_requested" })
-      .eq("id", id);
+    const { data, error: dbErr } = await supabase
+      .from('projects')
+      .update({ input_image_url: publicUrl, status: 'preview_requested' })
+      .eq('id', id)
+      .select('id, user_id, name, status, input_image_url, preview_url')
+      .single();
+    if (dbErr) return res.status(500).json({ ok:false, error: dbErr.message });
 
-    if (dbErr) return res.status(500).json({ ok: false, error: String(dbErr.message || dbErr) });
-
-    return res.json({ ok: true, url: publicUrl });
+    return res.json({ ok:true, item: data, url: publicUrl });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
+    return res.status(500).json({ ok:false, error: String(e.message || e) });
   }
 });
 

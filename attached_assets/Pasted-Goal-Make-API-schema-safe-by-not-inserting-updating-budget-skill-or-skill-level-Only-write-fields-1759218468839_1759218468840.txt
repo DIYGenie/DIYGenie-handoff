@@ -1,0 +1,64 @@
+Goal
+Make API schema-safe by not inserting/updating budget, skill, or skill_level. Only write fields we know exist: user_id, name, status, input_image_url, preview_url.
+
+Edits (exact):
+
+POST /api/projects — replace the insert object with this minimal one:
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    const { user_id, name, input_image_url } = req.body || {};
+    const insert = {
+      user_id: user_id || '00000000-0000-0000-0000-000000000001',
+      name: name || 'Untitled',
+      status: 'new',
+      input_image_url: input_image_url || null,
+      preview_url: null,
+    };
+    const { data, error } = await supabase
+      .from('projects')
+      .insert(insert)
+      .select('id, user_id, name, status, input_image_url, preview_url')
+      .single();
+    if (error) return res.status(500).json({ ok:false, error: error.message });
+    return res.json({ ok:true, item: data });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error: String(e.message || e) });
+  }
+});
+
+
+POST /api/projects/:id/image — ensure it only updates input_image_url and status:
+
+app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) return res.status(400).json({ ok:false, error:'missing_file' });
+
+    const ext = (req.file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
+    const path = `projects/${id}/${Date.now()}.${ext}`;
+
+    const { error: upErr } = await supabase
+      .storage.from(UPLOADS_BUCKET)
+      .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+    if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
+
+    const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
+    const publicUrl = pub?.publicUrl;
+
+    const { data, error: dbErr } = await supabase
+      .from('projects')
+      .update({ input_image_url: publicUrl, status: 'preview_requested' })
+      .eq('id', id)
+      .select('id, user_id, name, status, input_image_url, preview_url')
+      .single();
+    if (dbErr) return res.status(500).json({ ok:false, error: dbErr.message });
+
+    return res.json({ ok:true, item: data, url: publicUrl });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error: String(e.message || e) });
+  }
+});
+
+
+(If present) remove any references to budget, skill, or skill_level in other routes. Leave everything else as-is.
