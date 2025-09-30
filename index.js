@@ -150,23 +150,45 @@ app.post('/api/projects/:id/preview', async (req, res) => {
   }
 });
 
-// --- Build plan without preview --------------------------------------------
+// ---- Build plan WITHOUT preview ----
+// POST /api/projects/:id/build-without-preview
 app.post('/api/projects/:id/build-without-preview', async (req, res) => {
   const { id } = req.params;
 
   try {
-    // mark the project as moving forward without preview
+    // (Optional) you can pull other fields out of req.body if you want
+    // const { user_id, description, budget, skill_level } = req.body;
+
+    // Mark plan as ready (no AI image preview step)
     const { data, error } = await supabase
       .from('projects')
-      .update({ status: 'in_progress' }) // or 'plan_ready' if you prefer
+      .update({
+        status: 'plan_ready',
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', id)
-      .select('id, name, status, input_image_url, preview_url')
+      .select()
       .single();
 
     if (error) throw error;
-    return res.json({ ok: true, project: data });
+
+    // Return a simple placeholder "plan" so the UI can continue
+    res.json({
+      ok: true,
+      project: data,
+      plan: {
+        summary: 'Plan generated without AI preview.',
+        steps: [
+          { title: 'Measure & mark', minutes: 10 },
+          { title: 'Find studs', minutes: 10 },
+          { title: 'Drill anchors', minutes: 15 },
+          { title: 'Mount shelves', minutes: 20 },
+        ],
+      },
+    });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: String(err.message || err) });
+    console.error('build-without-preview error:', err);
+    res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 });
 
