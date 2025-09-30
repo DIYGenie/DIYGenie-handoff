@@ -109,6 +109,10 @@ async function requirePreviewAllowed(req, res, next) {
   }
 }
 
+// --- Feature Flags -----------------------------------------------------------
+const PREVIEW_PROVIDER = process.env.PREVIEW_PROVIDER || 'stub'; // 'decor8' or 'stub'
+const PLAN_PROVIDER = process.env.PLAN_PROVIDER || 'stub';       // 'openai' or 'stub'
+
 // --- Decor8 helpers ----------------------------------------------------------
 const DECOR8_BASE_URL = process.env.DECOR8_BASE_URL || 'https://api.decor8.ai';
 const DECOR8_API_KEY  = process.env.DECOR8_API_KEY;
@@ -143,6 +147,61 @@ async function callDecor8Generate({ input_image_url, room_type, design_style }) 
     throw err;
   }
   return data; // expected: { error: "", message: "...", info: { images: [...] } }
+}
+
+// --- OpenAI helpers ----------------------------------------------------------
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+async function callOpenAIGeneratePlan({ description, budget, skill_level }) {
+  const prompt = `Generate a detailed DIY project plan in JSON format for the following:
+Description: ${description}
+Budget: ${budget}
+Skill Level: ${skill_level}
+
+Return a JSON object with this structure:
+{
+  "title": "Project Title",
+  "materials": ["item1", "item2", ...],
+  "tools": ["tool1", "tool2", ...],
+  "steps": [
+    {"step": 1, "title": "Step title", "description": "Step details"},
+    ...
+  ],
+  "estimatedTime": "X hours",
+  "difficulty": "beginner|intermediate|advanced"
+}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a DIY project planning assistant. Return only valid JSON.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      response_format: { type: "json_object" }
+    })
+  });
+
+  const data = await res.json();
+  
+  if (!res.ok) {
+    const msg = data?.error?.message || `OpenAI ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('No content in OpenAI response');
+  
+  return JSON.parse(content);
 }
 
 // --- Health ---
@@ -296,6 +355,7 @@ app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
 app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) => {
   try {
     const { id } = req.params;
+    const { room_type, design_style } = req.body || {};
 
     // Validate project exists and has image
     const { data: project, error: pErr } = await supabase
@@ -319,15 +379,52 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
     // Return immediately
     res.json({ ok:true });
 
-    // Stub: flip to preview_ready after 5s (TODO: replace with real Decor8 call)
-    setTimeout(async () => {
-      await supabase.from('projects')
-        .update({ 
-          status: 'preview_ready',
-          preview_url: project.input_image_url // stub: use input as preview
-        })
-        .eq('id', id);
-    }, 5000);
+    // Background processing with provider selection
+    (async () => {
+      try {
+        let preview_url = project.input_image_url; // Default fallback
+
+        if (PREVIEW_PROVIDER === 'decor8' && DECOR8_API_KEY) {
+          try {
+            console.log(`[Preview] Calling Decor8 for project ${id}`);
+            const result = await callDecor8Generate({
+              input_image_url: project.input_image_url,
+              room_type: room_type || 'livingroom',
+              design_style: design_style || 'modern'
+            });
+            
+            // Extract preview URL from Decor8 response
+            if (result?.info?.images?.[0]) {
+              preview_url = result.info.images[0];
+              console.log(`[Preview] Decor8 success for ${id}: ${preview_url}`);
+            }
+          } catch (decor8Err) {
+            console.error(`[Preview] Decor8 failed for ${id}, using stub:`, decor8Err.message);
+            // Fall through to stub
+          }
+        } else {
+          console.log(`[Preview] Using stub for ${id} (provider: ${PREVIEW_PROVIDER})`);
+          // Stub: wait 5s before completion
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        // Update to preview_ready
+        await supabase.from('projects')
+          .update({ 
+            status: 'preview_ready',
+            preview_url
+          })
+          .eq('id', id);
+        
+        console.log(`[Preview] Completed for ${id}`);
+      } catch (bgErr) {
+        console.error(`[Preview] Background error for ${id}:`, bgErr);
+        // Set to error state
+        await supabase.from('projects')
+          .update({ status: 'preview_error' })
+          .eq('id', id);
+      }
+    })();
 
   } catch (err) {
     console.error('[Preview] error:', err);
@@ -340,6 +437,18 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
 app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, res) => {
   try {
     const { id } = req.params;
+    const { description, budget, skill_level } = req.body || {};
+
+    // Get project details
+    const { data: project, error: pErr } = await supabase
+      .from('projects')
+      .select('id, name')
+      .eq('id', id)
+      .single();
+
+    if (pErr || !project) {
+      return res.status(404).json({ ok:false, error: 'project_not_found' });
+    }
 
     // Mark plan requested
     await supabase.from('projects')
@@ -349,12 +458,49 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
     // Return immediately
     res.json({ ok:true });
 
-    // Stub: flip to plan_ready after 1-2s (TODO: replace with real plan generator)
-    setTimeout(async () => {
-      await supabase.from('projects')
-        .update({ status: 'plan_ready' })
-        .eq('id', id);
-    }, 1500);
+    // Background processing with provider selection
+    (async () => {
+      try {
+        let planData = null;
+
+        if (PLAN_PROVIDER === 'openai' && OPENAI_API_KEY) {
+          try {
+            console.log(`[Plan] Calling OpenAI for project ${id}`);
+            planData = await callOpenAIGeneratePlan({
+              description: description || project.name || 'DIY project',
+              budget: budget || 'medium',
+              skill_level: skill_level || 'beginner'
+            });
+            console.log(`[Plan] OpenAI success for ${id}`);
+          } catch (openaiErr) {
+            console.error(`[Plan] OpenAI failed for ${id}, using stub:`, openaiErr.message);
+            // Fall through to stub
+          }
+        } else {
+          console.log(`[Plan] Using stub for ${id} (provider: ${PLAN_PROVIDER})`);
+          // Stub: wait 1.5s before completion
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+
+        // Update to plan_ready with optional plan data
+        const updateData = { status: 'plan_ready' };
+        if (planData) {
+          updateData.plan_json = planData;
+        }
+
+        await supabase.from('projects')
+          .update(updateData)
+          .eq('id', id);
+        
+        console.log(`[Plan] Completed for ${id}`);
+      } catch (bgErr) {
+        console.error(`[Plan] Background error for ${id}:`, bgErr);
+        // Set to error state
+        await supabase.from('projects')
+          .update({ status: 'plan_error' })
+          .eq('id', id);
+      }
+    })();
 
   } catch (err) {
     console.error('[build-without-preview] error:', err);

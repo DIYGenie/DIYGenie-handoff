@@ -1,0 +1,39 @@
+You are working in the diy-genie-webhooks backend (Express + Supabase). Goal: make preview generation and plan building fully reliable with zero manual IDs and simple, deterministic end-to-end App Tests.
+
+Requirements & Checklist
+1) Do NOT require me to provide any UUIDs by hand. Detect or reuse the dev user ID already used in the codebase/tests. If a constant exists (e.g., DEV_USER_ID or similar), use it. Otherwise create/fetch a dev user as the app already does in /me/entitlements.
+2) Keep current non-blocking behavior:
+   - POST /api/projects           -> creates project, returns { ok:true, id, ... }
+   - POST /api/projects/:id/image -> accepts multipart 'image' OR { direct_url }, stores input_image_url, returns { ok:true }
+   - POST /api/projects/:id/preview -> returns immediately { ok:true } and flips to preview_ready later
+   - POST /api/projects/:id/build-without-preview -> returns immediately { ok:true } and flips to plan_ready later
+   - GET  /api/projects?user_id=... -> returns list with status, input_image_url, preview_url, etc.
+3) Entitlements:
+   - Free: 2 plans total, NO previews (previewAllowed=false)
+   - Casual: 5 plans total, previews allowed
+   - Pro: 25 plans total, previews allowed
+   Make sure /me/entitlements/:userId returns { ok, tier, quota, remaining, previewAllowed } accordingly and that preview/build endpoints enforce this.
+4) Integrate Decor8 + OpenAI behind safe feature flags with fallbacks:
+   - ENV: DECOR8_BASE_URL, DECOR8_API_KEY; PREVIEW_PROVIDER=decor8|stub (default stub)
+   - When PREVIEW_PROVIDER=decor8 and previewAllowed=true, call POST /generate_designs_for_room with input_image_url and minimal required fields. If Decor8 returns non-200 or throws, fall back to stub completion so the UI never spins forever.
+   - ENV: PLAN_PROVIDER=openai|stub (default stub), OPENAI_API_KEY. When PLAN_PROVIDER=openai, generate a JSON plan from { description, budget, skill } and store it; on error fall back to stub.
+5) Never auto-start preview or plan on image upload. Only act when the explicit POST endpoints are called.
+6) CORS must accept the Theme origin and the deployed domain.
+
+App Tests (no manual IDs)
+Create an automated test file or harness that:
+- Creates a project (POST /api/projects) for the dev user
+- Uploads image via direct_url = https://qnevigmqyuxfzyczmctc.supabase.co/storage/v1/object/public/uploads/room-test.jpeg
+- Calls POST /api/projects/:id/preview and immediately GET /api/projects/:id -> expect status changes from 'draft' → 'preview_ready' within ~5s when previewAllowed; if tier blocks previews, ensure endpoint returns ok:true but server enforces block (no preview_ready) OR respond with a clear 403-style JSON – pick one consistent behavior and update the UI contract in the response
+- Calls POST /api/projects/:id/build-without-preview and immediately GET /api/projects/:id -> expect status flips to 'plan_ready' within ~2s
+- Verifies entitlements decrement remaining appropriately and never go negative
+- Verifies that GET /api/projects?user_id=... includes { id, status, input_image_url, preview_url? }
+
+Deliverables
+- Code changes implementing PREVIEW_PROVIDER/PLAN_PROVIDER feature flags with safe fallbacks
+- Solid error handling: always return JSON { ok:false, error } on failures (never HTML)
+- A single “App Test” runner that performs the full flow with no hardcoded IDs beyond the discovered dev user
+- Short README section: how to toggle providers and how the stub timers work
+- Do NOT modify payment/Stripe code
+
+When you’re done, run the App Test and paste the short results (pass/fail per step) into the console. If any step fails, fix it and re-run until green.
