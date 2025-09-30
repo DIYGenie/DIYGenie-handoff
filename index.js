@@ -260,7 +260,7 @@ app.get('/api/projects/:id', async (req, res) => {
     const { id } = req.params;
     const { data, error } = await supabase
       .from('projects')
-      .select('id,name,user_id,budget,skill,status,input_image_url,preview_url,plan')
+      .select('*')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;
@@ -281,13 +281,16 @@ app.post('/api/projects', requireQuota, async (req, res) => {
       status: 'draft',
       input_image_url: input_image_url || null,
       preview_url: null,
-      budget: budget || null,
-      skill: skill || null,
     };
+    
+    // Add budget and skill if provided (columns may not exist in DB yet)
+    if (budget) insert.budget = budget;
+    if (skill) insert.skill = skill;
+    
     const { data, error } = await supabase
       .from('projects')
       .insert(insert)
-      .select('id, user_id, name, status, input_image_url, preview_url, budget, skill')
+      .select()
       .single();
     if (error) return res.status(500).json({ ok:false, error: error.message });
     return res.json({ ok:true, item: data });
@@ -449,7 +452,7 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
     // Get project details
     const { data: project, error: pErr } = await supabase
       .from('projects')
-      .select('id, name, budget, skill, plan')
+      .select('*')
       .eq('id', id)
       .single();
 
@@ -458,7 +461,7 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
     }
 
     // Mark plan requested (idempotent - skip if already has plan)
-    if (!project.plan) {
+    if (!project.plan_json) {
       await supabase.from('projects')
         .update({ status: 'plan_requested' })
         .eq('id', id);
@@ -468,7 +471,7 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
     res.json({ ok:true });
 
     // Background processing with provider selection (skip if already has plan)
-    if (!project.plan) {
+    if (!project.plan_json) {
       (async () => {
         try {
           let planData = null;
@@ -529,7 +532,7 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
           await supabase.from('projects')
             .update({ 
               status: 'plan_ready',
-              plan: planData
+              plan_json: planData
             })
             .eq('id', id);
           
