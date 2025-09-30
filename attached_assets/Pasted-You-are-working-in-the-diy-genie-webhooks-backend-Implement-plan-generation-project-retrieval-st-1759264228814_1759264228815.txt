@@ -1,0 +1,73 @@
+You are working in the diy-genie-webhooks backend.
+
+Implement plan generation + project retrieval stubs so the app can build a plan without previews.
+
+Acceptance criteria:
+1) DB schema
+   - Ensure table public.projects has these columns (create if missing):
+     id uuid PK, user_id uuid, name text, budget text, skill text,
+     status text default 'draft',
+     input_image_url text, preview_url text,
+     plan jsonb default null,
+     created_at timestamptz default now().
+   - DO NOT remove existing data. Safe migrations only.
+
+2) POST /api/projects
+   - Unchanged: create row (draft) and return { ok:true, id }.
+
+3) POST /api/projects/:id/image
+   - Accept multipart (key 'image') OR { direct_url } JSON.
+   - Store input_image_url.
+   - MUST NOT change status (no auto actions).
+   - Returns { ok:true }.
+
+4) POST /api/projects/:id/build-without-preview
+   - Returns immediately { ok:true }.
+   - Within ~1.5s, flip status to 'plan_ready' AND set projects.plan to a stub JSON object like:
+     {
+       summary: { title, est_cost, est_time, difficulty },
+       steps: [ { title, detail, duration_minutes } ],
+       tools: [ ... ],
+       materials: [ { name, qty, unit } ],
+       safety: [ ... ],
+       tips: [ ... ]
+     }
+   - Use name/budget/skill to tailor the stub text a little (e.g., $$ -> medium budget).
+   - Idempotent (calling again keeps existing plan).
+
+5) POST /api/projects/:id/preview
+   - Return { ok:true } immediately.
+   - Set status to 'preview_requested' then flip to 'preview_ready' about 5s later
+     with preview_url filled (can be a static placeholder).
+
+6) GET /api/projects?user_id=...
+   - Already exists: include id, name, status, preview_url, input_image_url.
+
+7) GET /api/projects/:id
+   - NEW endpoint. Returns:
+     {
+       ok:true,
+       project: {
+         id, name, user_id, budget, skill,
+         status, input_image_url, preview_url,
+         plan   // include when status is 'plan_ready'
+       }
+     }
+
+8) GET /me/entitlements/:userId
+   - Keep your current logic. Ensure it returns:
+     { ok:true, tier, quota, remaining, previewAllowed }
+
+9) Error handling
+   - All errors: { ok:false, error } with useful messages.
+   - CORS stays open to the theme app.
+
+10) Tests to run
+   - Create → Image (direct_url) → confirm status still 'draft'
+   - Build-without-preview → 1.5s later `status='plan_ready'` and `plan` present
+   - Preview path remains a stub, gated by entitlements
+   - GET /api/projects/:id returns the plan JSON when ready
+
+If needed, add a tiny in-memory job/timer (setTimeout) to flip statuses. Do not introduce external queues.
+
+When done, print a short checklist of the endpoints and sample curl commands with NO hardcoded user ids.

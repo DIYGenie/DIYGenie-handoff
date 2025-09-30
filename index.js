@@ -260,12 +260,12 @@ app.get('/api/projects/:id', async (req, res) => {
     const { id } = req.params;
     const { data, error } = await supabase
       .from('projects')
-      .select('id,name,status,input_image_url,preview_url')
+      .select('id,name,user_id,budget,skill,status,input_image_url,preview_url,plan')
       .eq('id', id)
       .maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ ok:false, error:'not_found' });
-    res.json({ ok: true, item: data });
+    res.json({ ok: true, project: data });
   } catch (e) {
     res.status(500).json({ ok:false, error: String(e.message || e) });
   }
@@ -274,18 +274,20 @@ app.get('/api/projects/:id', async (req, res) => {
 // --- Projects: CREATE ---
 app.post('/api/projects', requireQuota, async (req, res) => {
   try {
-    const { user_id, name, input_image_url } = req.body || {};
+    const { user_id, name, input_image_url, budget, skill } = req.body || {};
     const insert = {
       user_id: user_id || '00000000-0000-0000-0000-000000000001',
       name: name || 'Untitled',
       status: 'draft',
       input_image_url: input_image_url || null,
       preview_url: null,
+      budget: budget || null,
+      skill: skill || null,
     };
     const { data, error } = await supabase
       .from('projects')
       .insert(insert)
-      .select('id, user_id, name, status, input_image_url, preview_url')
+      .select('id, user_id, name, status, input_image_url, preview_url, budget, skill')
       .single();
     if (error) return res.status(500).json({ ok:false, error: error.message });
     return res.json({ ok:true, item: data });
@@ -447,7 +449,7 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
     // Get project details
     const { data: project, error: pErr } = await supabase
       .from('projects')
-      .select('id, name')
+      .select('id, name, budget, skill, plan')
       .eq('id', id)
       .single();
 
@@ -455,62 +457,92 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
       return res.status(404).json({ ok:false, error: 'project_not_found' });
     }
 
-    // Mark plan requested
-    await supabase.from('projects')
-      .update({ status: 'plan_requested' })
-      .eq('id', id);
+    // Mark plan requested (idempotent - skip if already has plan)
+    if (!project.plan) {
+      await supabase.from('projects')
+        .update({ status: 'plan_requested' })
+        .eq('id', id);
+    }
 
     // Return immediately
     res.json({ ok:true });
 
-    // Background processing with provider selection
-    (async () => {
-      try {
-        let planData = null;
-        let useStubDelay = false;
+    // Background processing with provider selection (skip if already has plan)
+    if (!project.plan) {
+      (async () => {
+        try {
+          let planData = null;
+          let useStubDelay = false;
 
-        if (PLAN_PROVIDER === 'openai' && OPENAI_API_KEY) {
-          try {
-            console.log(`[Plan] Calling OpenAI for project ${id}`);
-            planData = await callOpenAIGeneratePlan({
-              description: description || project.name || 'DIY project',
-              budget: budget || 'medium',
-              skill_level: skill_level || 'beginner'
-            });
-            console.log(`[Plan] OpenAI success for ${id}`);
-          } catch (openaiErr) {
-            console.error(`[Plan] OpenAI failed for ${id}, falling back to stub:`, openaiErr.message);
+          if (PLAN_PROVIDER === 'openai' && OPENAI_API_KEY) {
+            try {
+              console.log(`[Plan] Calling OpenAI for project ${id}`);
+              planData = await callOpenAIGeneratePlan({
+                description: description || project.name || 'DIY project',
+                budget: budget || project.budget || 'medium',
+                skill_level: skill_level || project.skill || 'beginner'
+              });
+              console.log(`[Plan] OpenAI success for ${id}`);
+            } catch (openaiErr) {
+              console.error(`[Plan] OpenAI failed for ${id}, falling back to stub:`, openaiErr.message);
+              useStubDelay = true;
+            }
+          } else {
+            console.log(`[Plan] Using stub for ${id} (provider: ${PLAN_PROVIDER})`);
             useStubDelay = true;
           }
-        } else {
-          console.log(`[Plan] Using stub for ${id} (provider: ${PLAN_PROVIDER})`);
-          useStubDelay = true;
-        }
 
-        // Apply stub delay for fallback or stub mode
-        if (useStubDelay) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        }
+          // Apply stub delay for fallback or stub mode
+          if (useStubDelay) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
 
-        // Update to plan_ready with optional plan data
-        const updateData = { status: 'plan_ready' };
-        if (planData) {
-          updateData.plan_json = planData;
-        }
+          // Generate stub plan if needed
+          if (!planData) {
+            const projBudget = budget || project.budget || 'medium';
+            const projSkill = skill_level || project.skill || 'beginner';
+            const budgetMap = { low: '$', medium: '$$', high: '$$$' };
+            const budgetLabel = budgetMap[projBudget] || '$$';
+            
+            planData = {
+              summary: {
+                title: project.name || 'DIY Project',
+                est_cost: budgetLabel,
+                est_time: projSkill === 'advanced' ? '8-12 hours' : projSkill === 'intermediate' ? '4-8 hours' : '2-4 hours',
+                difficulty: projSkill
+              },
+              steps: [
+                { title: 'Preparation', detail: 'Gather all materials and prepare workspace', duration_minutes: 30 },
+                { title: 'Main Work', detail: 'Execute the core project tasks', duration_minutes: 120 },
+                { title: 'Finishing Touches', detail: 'Add final details and clean up', duration_minutes: 45 }
+              ],
+              tools: ['Basic toolkit', 'Safety equipment'],
+              materials: [
+                { name: 'Primary materials', qty: '1', unit: 'set' }
+              ],
+              safety: ['Wear safety goggles', 'Keep workspace ventilated'],
+              tips: ['Take your time', 'Measure twice, cut once']
+            };
+          }
 
-        await supabase.from('projects')
-          .update(updateData)
-          .eq('id', id);
-        
-        console.log(`[Plan] Completed for ${id}`);
-      } catch (bgErr) {
-        console.error(`[Plan] Background error for ${id}:`, bgErr);
-        // Set to error state
-        await supabase.from('projects')
-          .update({ status: 'plan_error' })
-          .eq('id', id);
-      }
-    })();
+          // Update to plan_ready with plan data
+          await supabase.from('projects')
+            .update({ 
+              status: 'plan_ready',
+              plan: planData
+            })
+            .eq('id', id);
+          
+          console.log(`[Plan] Completed for ${id}`);
+        } catch (bgErr) {
+          console.error(`[Plan] Background error for ${id}:`, bgErr);
+          // Set to error state
+          await supabase.from('projects')
+            .update({ status: 'plan_error' })
+            .eq('id', id);
+        }
+      })();
+    }
 
   } catch (err) {
     console.error('[build-without-preview] error:', err);
