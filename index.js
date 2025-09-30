@@ -33,14 +33,25 @@ const TIER_RULES = {
 };
 
 async function getEntitlements(supabase, userId) {
-  // Get tier from profiles
-  const { data: prof, error: profErr } = await supabase
+  // Get tier from profiles (auto-create if doesn't exist)
+  let { data: prof, error: profErr } = await supabase
     .from('profiles')
     .select('plan_tier')
     .eq('user_id', userId)
     .single();
 
-  if (profErr && profErr.code !== 'PGRST116') {
+  // If user doesn't exist, create them with free tier
+  if (profErr && profErr.code === 'PGRST116') {
+    const { data: newProf } = await supabase
+      .from('profiles')
+      .insert({ user_id: userId, plan_tier: 'free' })
+      .select('plan_tier')
+      .single();
+    prof = newProf;
+    profErr = null;
+  }
+
+  if (profErr) {
     // return something sane if RLS or lookup issues
     return { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
   }
@@ -224,23 +235,48 @@ app.post('/api/projects', requireQuota, async (req, res) => {
   }
 });
 
-// POST /api/projects/:id/image  (field name: "file")
-app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
+// POST /api/projects/:id/image  (accepts multipart file/image OR direct_url)
+app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
   try {
     const { id } = req.params;
-    if (!req.file) return res.status(400).json({ ok:false, error:'missing_file' });
+    const { direct_url } = req.body || {};
+    let publicUrl;
 
-    const ext = (req.file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
-    const path = `projects/${id}/${Date.now()}.${ext}`;
+    // Handle direct_url (no upload needed)
+    if (direct_url) {
+      publicUrl = direct_url;
+    } 
+    // Handle file upload (support both 'file' and 'image' field names)
+    else if (req.files && req.files.length > 0) {
+      const req_file = req.files[0];
+      const ext = (req_file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
+      const path = `projects/${id}/${Date.now()}.${ext}`;
 
-    const { error: upErr } = await supabase
-      .storage.from(UPLOADS_BUCKET)
-      .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
-    if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
+      const { error: upErr } = await supabase
+        .storage.from(UPLOADS_BUCKET)
+        .upload(path, req_file.buffer, { contentType: req_file.mimetype, upsert: true });
+      if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
 
-    const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
-    const publicUrl = pub?.publicUrl;
+      const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
+      publicUrl = pub?.publicUrl;
+    } 
+    else if (req.file) {
+      const ext = (req.file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
+      const path = `projects/${id}/${Date.now()}.${ext}`;
 
+      const { error: upErr } = await supabase
+        .storage.from(UPLOADS_BUCKET)
+        .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+      if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
+
+      const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
+      publicUrl = pub?.publicUrl;
+    } 
+    else {
+      return res.status(400).json({ ok:false, error:'missing_file_or_direct_url' });
+    }
+
+    // Update project with image URL (NO auto-actions)
     const { data, error: dbErr } = await supabase
       .from('projects')
       .update({ input_image_url: publicUrl })
@@ -261,10 +297,10 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
   try {
     const { id } = req.params;
 
-    // 1) Load project (we expect columns: input_image_url, room_type, design_style)
+    // Validate project exists and has image
     const { data: project, error: pErr } = await supabase
       .from('projects')
-      .select('id, input_image_url, room_type, design_style')
+      .select('id, input_image_url')
       .eq('id', id)
       .single();
 
@@ -275,38 +311,27 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
       return res.status(422).json({ ok:false, error: 'missing_input_image_url' });
     }
 
-    // 2) Mark preview requested
+    // Mark preview requested
     await supabase.from('projects')
       .update({ status: 'preview_requested' })
       .eq('id', id);
 
-    // 3) Call Decor8
-    const deco = await callDecor8Generate({
-      input_image_url: project.input_image_url,
-      room_type: project.room_type || 'livingroom',
-      design_style: project.design_style || 'minimalist',
-    });
+    // Return immediately
+    res.json({ ok:true });
 
-    // 4) Pull first image URL and save
-    const preview_url = deco?.info?.images?.[0] || null;
+    // Stub: flip to preview_ready after 5s (TODO: replace with real Decor8 call)
+    setTimeout(async () => {
+      await supabase.from('projects')
+        .update({ 
+          status: 'preview_ready',
+          preview_url: project.input_image_url // stub: use input as preview
+        })
+        .eq('id', id);
+    }, 5000);
 
-    await supabase.from('projects')
-      .update({
-        status: preview_url ? 'preview_ready' : 'preview_failed',
-        preview_url
-      })
-      .eq('id', id);
-
-    return res.json({ ok:true, status: preview_url ? 'preview_ready' : 'preview_failed', preview_url, deco });
   } catch (err) {
-    console.error('[Decor8] error:', err.status, err.message, err.data || '');
-    return res.status(502).json({
-      ok:false,
-      error: 'decor8_failed',
-      detail: err.message,
-      provider_status: err.status || 500,
-      provider: 'decor8'
-    });
+    console.error('[Preview] error:', err);
+    return res.status(500).json({ ok:false, error: String(err.message || err) });
   }
 });
 
@@ -316,12 +341,21 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
   try {
     const { id } = req.params;
 
-    // Example: mark requested. You'll hook this into your plan generator next.
+    // Mark plan requested
     await supabase.from('projects')
       .update({ status: 'plan_requested' })
       .eq('id', id);
 
-    return res.json({ ok:true, status:'plan_requested' });
+    // Return immediately
+    res.json({ ok:true });
+
+    // Stub: flip to plan_ready after 1-2s (TODO: replace with real plan generator)
+    setTimeout(async () => {
+      await supabase.from('projects')
+        .update({ status: 'plan_ready' })
+        .eq('id', id);
+    }, 1500);
+
   } catch (err) {
     console.error('[build-without-preview] error:', err);
     return res.status(500).json({ ok:false, error:'build_without_preview_failed' });

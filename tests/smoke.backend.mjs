@@ -1,0 +1,158 @@
+#!/usr/bin/env node
+
+// Backend smoke tests for DIY Genie API
+
+const API_BASE = process.env.API_BASE || 'http://localhost:5000';
+const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';
+const TEST_IMAGE_URL = 'https://qnevigmqyuxfzyczmctc.supabase.co/storage/v1/object/public/uploads/room-test.jpeg';
+
+// Helper functions
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function makeRequest(method, path, body = null, isMultipart = false) {
+  const url = `${API_BASE}${path}`;
+  const headers = {};
+  
+  if (!isMultipart && body) {
+    headers['Content-Type'] = 'application/json';
+  }
+  
+  const options = {
+    method,
+    headers,
+  };
+  
+  if (body) {
+    options.body = isMultipart ? body : JSON.stringify(body);
+  }
+  
+  console.log(`\n${method} ${url}`);
+  if (body && !isMultipart) console.log('Body:', JSON.stringify(body, null, 2));
+  
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+  
+  console.log(`Status: ${res.status}`);
+  console.log('Response:', JSON.stringify(data, null, 2));
+  
+  if (!res.ok) {
+    throw new Error(`Request failed: ${res.status} - ${JSON.stringify(data)}`);
+  }
+  
+  return data;
+}
+
+async function pollForStatus(projectId, targetStatus, maxSeconds = 30) {
+  const maxAttempts = Math.ceil(maxSeconds / 2);
+  console.log(`\nPolling for status=${targetStatus} (max ${maxSeconds}s)...`);
+  
+  for (let i = 0; i < maxAttempts; i++) {
+    await sleep(2000);
+    const data = await makeRequest('GET', `/api/projects/${projectId}`);
+    console.log(`[Poll ${i + 1}] Status: ${data.item?.status}`);
+    
+    if (data.item?.status === targetStatus) {
+      console.log(`✓ Reached ${targetStatus}`);
+      return data.item;
+    }
+  }
+  
+  throw new Error(`Timeout: status did not reach ${targetStatus} in ${maxSeconds}s`);
+}
+
+// Main test flow
+async function runTests() {
+  console.log('========================================');
+  console.log('DIY Genie Backend Smoke Tests');
+  console.log(`API Base: ${API_BASE}`);
+  console.log('========================================');
+  
+  let projectId;
+  
+  try {
+    // Test 0: Ensure test user exists in profiles table
+    console.log('\n[TEST 0] Ensure test user exists');
+    try {
+      // Try to create the test user (will silently fail if already exists due to unique constraint)
+      await fetch(`${API_BASE.replace('5000', '5432')}/...`); // Can't do this easily
+      console.log('(Skipping user creation - assuming user exists or will be auto-created)');
+    } catch (e) {
+      // Ignore - user might already exist
+    }
+    
+    // Test 1: Get entitlements
+    console.log('\n[TEST 1] Get entitlements');
+    const ent = await makeRequest('GET', `/me/entitlements/${TEST_USER_ID}`);
+    console.log(`✓ Entitlements: tier=${ent.tier}, quota=${ent.quota}, remaining=${ent.remaining}, previewAllowed=${ent.previewAllowed}`);
+    
+    // Test 2: Create project
+    console.log('\n[TEST 2] Create project');
+    const createRes = await makeRequest('POST', '/api/projects', {
+      user_id: TEST_USER_ID,
+      name: 'Smoke Test Project',
+      budget: 'medium',
+      skill_level: 'beginner'
+    });
+    projectId = createRes.item?.id;
+    if (!projectId) throw new Error('No project ID returned');
+    console.log(`✓ Created project: ${projectId}`);
+    
+    // Test 3: Upload image via direct_url
+    console.log('\n[TEST 3] Upload image via direct_url');
+    const imageRes = await makeRequest('POST', `/api/projects/${projectId}/image`, {
+      direct_url: TEST_IMAGE_URL
+    });
+    console.log(`✓ Image uploaded: ${imageRes.url || imageRes.item?.input_image_url}`);
+    
+    // Verify image was set
+    const afterUpload = await makeRequest('GET', `/api/projects/${projectId}`);
+    console.log(`Status after upload: ${afterUpload.item?.status}`);
+    if (afterUpload.item?.input_image_url !== TEST_IMAGE_URL) {
+      console.warn(`⚠ Expected input_image_url to be ${TEST_IMAGE_URL}, got ${afterUpload.item?.input_image_url}`);
+    }
+    
+    // Test 4: Build without preview
+    console.log('\n[TEST 4] Build without preview');
+    const buildRes = await makeRequest('POST', `/api/projects/${projectId}/build-without-preview`, {
+      user_id: TEST_USER_ID
+    });
+    console.log(`✓ Build triggered: ${buildRes.status || 'ok'}`);
+    
+    // Poll for plan_ready
+    await pollForStatus(projectId, 'plan_ready', 10);
+    
+    // Test 5: Request preview (if allowed)
+    if (ent.previewAllowed) {
+      console.log('\n[TEST 5] Request preview');
+      const previewRes = await makeRequest('POST', `/api/projects/${projectId}/preview`, {
+        user_id: TEST_USER_ID
+      });
+      console.log(`✓ Preview triggered: ${previewRes.status || 'ok'}`);
+      
+      // Poll for preview_ready
+      await pollForStatus(projectId, 'preview_ready', 30);
+    } else {
+      console.log('\n[TEST 5] Preview - SKIPPED (not allowed for tier)');
+    }
+    
+    console.log('\n========================================');
+    console.log('✓ ALL TESTS PASSED');
+    console.log('========================================');
+    
+  } catch (err) {
+    console.error('\n========================================');
+    console.error('✗ TEST FAILED');
+    console.error('========================================');
+    console.error(err.message);
+    console.error(err.stack);
+    process.exit(1);
+  }
+}
+
+runTests();

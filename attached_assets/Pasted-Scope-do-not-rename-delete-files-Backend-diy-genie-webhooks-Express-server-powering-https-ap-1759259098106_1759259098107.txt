@@ -1,0 +1,129 @@
+Scope (do not rename/delete files):
+
+Backend: diy-genie-webhooks (Express server powering https://api.diygenieapp.com
+)
+
+Frontend: DIYGenieTheme (Expo RN web preview)
+
+Use existing secrets; do not print them.
+
+Ground truth & rules:
+
+API BASE (only): https://api.diygenieapp.com
+
+Plans:
+
+free → quota 2, no previews
+
+casual → quota 5, previews allowed
+
+pro → quota 25, previews allowed
+
+No auto actions after upload. Buttons must explicitly call APIs.
+
+Endpoints expected by the app:
+
+POST /api/projects/:id/image (multipart: accept file or image; also accept direct_url)
+
+POST /api/projects/:id/preview → returns {ok:true} immediately (for now can stub flip after 5s)
+
+POST /api/projects/:id/build-without-preview → returns {ok:true} immediately (stub flip after ~1–2s)
+
+GET /api/projects and GET /api/projects/:id → include id,name,status,input_image_url,preview_url
+
+GET /me/entitlements/:userId → returns {tier, quota, remaining, previewAllowed}
+
+Frontend must gate buttons based on entitlements and must not auto-trigger preview/build.
+
+What to do:
+
+Backend smoke tests (against prod base)
+
+Write a tiny Node script tests/smoke.backend.mjs that:
+
+Creates (or reuses) a project via POST /api/projects (include user_id, name, budget, skill_level if accepted by API).
+
+Sets image via POST /api/projects/:id/image using direct_url =
+https://qnevigmqyuxfzyczmctc.supabase.co/storage/v1/object/public/uploads/room-test.jpeg
+(also try multipart with field file, fallback to image).
+
+Calls POST /api/projects/:id/preview then polls GET /api/projects/:id every 2s up to 30s for status=preview_ready (log transitions).
+
+Calls POST /api/projects/:id/build-without-preview then polls for status=plan_ready (or planning→plan_ready) within 10s.
+
+Run it. If any step fails (404/500), dump the full response body.
+
+Backend fixes (surgical)
+
+If /image 500s due to missing file, make handler tolerant: accept file or image, or accept direct_url to set input_image_url directly (and set status='image_ready'). Do not auto-start preview here.
+
+If build-without-preview 404s, add the route to the server that prod domain uses. Return {ok:true} immediately and (for now) flip to plan_ready after ~1–2s.
+
+If preview spins, ensure it returns {ok:true} immediately and (stub) flips to preview_ready after ~5s. (We’ll wire Decor8 later.)
+
+Ensure GET /api/projects/:id includes status,input_image_url,preview_url and returns {ok:false,error} on failures (so the app doesn’t hang).
+
+Keep CORS permissive for these paths.
+
+Entitlements enforcement
+
+Ensure GET /me/entitlements/:userId returns:
+
+free: {tier:'free', quota:2, previewAllowed:false, remaining:<quota - project_count>}
+
+casual: {tier:'casual', quota:5, previewAllowed:true, remaining:...}
+
+pro: {tier:'pro', quota:25, previewAllowed:true, remaining:...}
+
+On server: before preview and build-without-preview, enforce:
+
+build-without-preview: require remaining > 0
+
+preview: require previewAllowed === true and remaining > 0
+
+Return 403 JSON {ok:false, error:'quota_exhausted'} or {ok:false, error:'preview_not_in_plan'} with entitlements included.
+
+Frontend app testing (headless)
+
+Enable app testing and add Playwright (or equivalent) tests under apps/tests/e2e/:
+
+Test A (Free tier): load New Project, confirm Preview button disabled, Build Without Preview enabled; simulate upload by setting a hidden input or hitting /image endpoint with direct_url; click Build Without Preview and assert the list shows status change to plan_ready within 10s; no auto actions occur.
+
+Test B (Casual/Pro): with entitlements mocked/returned as such, ensure Preview is enabled, triggers POST /preview, and status flips to preview_ready within 30s (stub).
+
+If UI auto-triggers after upload, remove the side-effect (e.g., useEffect watching input_image_url). Only buttons should call APIs.
+
+Report & patch
+
+Print concise failures with the exact request/response causing them.
+
+Propose minimal diffs (file path + patch) to fix each.
+
+Apply fixes only to affected files. No structural changes without my confirmation.
+
+Re-run tests until green.
+
+Acceptance criteria (must all pass):
+
+/api/projects/:id/image accepts either multipart (file or image) or direct_url; sets input_image_url; returns {ok:true}; does not auto-start anything.
+
+/api/projects/:id/preview returns {ok:true} immediately; project flips to preview_ready within ~5s (stub).
+
+/api/projects/:id/build-without-preview returns {ok:true} immediately; project flips to plan_ready within ~2–10s.
+
+Entitlements endpoint returns correct tier/quota/remaining/previewAllowed, and frontend disables/enables buttons accordingly.
+
+Headless tests show: no auto-actions after upload; explicit buttons work; statuses update; no infinite spinners.
+
+All calls hit https://api.diygenieapp.com
+ (no dev URLs/ports).
+
+Output I expect from you:
+
+Test logs (commands run, responses).
+
+Short list of failing endpoints (if any) with reason.
+
+Exact code diffs you applied (per file).
+
+Confirmation that all acceptance checks pass.
