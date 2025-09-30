@@ -25,6 +25,111 @@ const UPLOADS_BUCKET = process.env.EXPO_PUBLIC_UPLOADS_BUCKET || "uploads";
 // Dev user the app uses in preview
 const DEV_USER = '00000000-0000-0000-0000-000000000001';
 
+// ====== Provider env ======
+const {
+  DECOR8_BASE_URL,
+  DECOR8_API_KEY,
+  DECOR8_PREVIEW_CREATE_PATH = '/v1/preview',
+  DECOR8_PREVIEW_STATUS_PATH = '/v1/preview/',
+  OPENAI_API_KEY,
+  OPENAI_MODEL = 'gpt-4o-mini',
+  PREVIEW_PROVIDER = 'decor8',
+  PLAN_PROVIDER = 'openai',
+} = process.env;
+
+// Tiny helper
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ---------- Decor8 preview helpers ----------
+async function decor8CreatePreview({ image_url, style = 'modern' }) {
+  const url = new URL(DECOR8_PREVIEW_CREATE_PATH, DECOR8_BASE_URL).toString();
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${DECOR8_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ image_url, style }),
+  });
+  if (!resp.ok) throw new Error(`Decor8 create failed: ${await resp.text()}`);
+  return resp.json(); // could be {preview_url} or {job_id}
+}
+
+async function decor8PollStatus(job_id, { maxMs = 60_000, everyMs = 2000 } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    const url = new URL(`${DECOR8_PREVIEW_STATUS_PATH}${job_id}`, DECOR8_BASE_URL).toString();
+    const r = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${DECOR8_API_KEY}` }
+    });
+    if (!r.ok) throw new Error(`Decor8 status failed: ${await r.text()}`);
+    const data = await r.json(); // expect {status, preview_url?, error?}
+    if (data.status === 'completed' && data.preview_url) return data.preview_url;
+    if (data.status === 'failed') throw new Error(data.error || 'Decor8 job failed');
+    await sleep(everyMs);
+  }
+  throw new Error('Decor8 preview timed out');
+}
+
+async function runPreviewWithDecor8(projectId, image_url) {
+  const out = await decor8CreatePreview({ image_url });
+  if (out.preview_url) return out.preview_url;       // synchronous response style
+  if (out.job_id) return await decor8PollStatus(out.job_id); // job/polling style
+  throw new Error('Unexpected Decor8 response');
+}
+
+// ---------- OpenAI plan helper ----------
+async function buildPlanWithOpenAI(project) {
+  const sys = `You are a renovation planning assistant. 
+Return JSON only. Include steps, materials with quantities, tools, estimated hours, and a cost range aligned to the budget tier ($, $$, $$$).`;
+
+  const user = {
+    role: 'user',
+    content: [
+      { type: 'text', text:
+`Create a concise step-by-step DIY plan.
+
+Project: ${project.name || ''}
+Budget: ${project.budget || ''}
+Skill level: ${project.skill_level || ''}
+
+If helpful, reference the room photo URL: ${project.input_image_url || 'N/A'}
+
+Return a JSON object with:
+{
+  "summary": string,
+  "steps": [{ "title": string, "detail": string, "est_hours": number }],
+  "materials": [{ "name": string, "qty": string, "approx_cost": number }],
+  "tools": [string],
+  "total_est_hours": number,
+  "cost_range": { "low": number, "high": number }
+}`
+      }
+    ]
+  };
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      response_format: { type: 'json_object' },
+      temperature: 0.4,
+      messages: [
+        { role: 'system', content: sys },
+        user
+      ]
+    })
+  });
+  if (!resp.ok) throw new Error(`OpenAI failed: ${await resp.text()}`);
+  const data = await resp.json();
+  const txt = data.choices?.[0]?.message?.content || '{}';
+  return JSON.parse(txt);
+}
+
 // --- Health ---
 app.get('/health', (req, res) => res.json({ ok: true, status: 'healthy' }));
 app.get('/', (req, res) => res.json({
@@ -133,44 +238,69 @@ app.post('/api/projects/:id/image', upload.single('file'), async (req, res) => {
 
 // --- Projects: REQUEST PREVIEW (kick off) ---
 app.post('/api/projects/:id/preview', async (req, res) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
-    const up = await supabase.from('projects')
-      .update({ status: 'preview_requested' })
-      .eq('id', id);
-    if (up.error) throw up.error;
+    // Mark requested
+    await supabase.from('projects').update({ status: 'preview_requested' }).eq('id', id);
+    res.status(202).json({ ok: true });
 
-    res.json({ ok: true });
+    // Fire & forget worker
+    (async () => {
+      try {
+        const { data: p, error: pe } = await supabase.from('projects')
+          .select('id, input_image_url').eq('id', id).single();
+        if (pe) throw pe;
+        if (!p?.input_image_url) throw new Error('No image_url on project');
 
-    // dev-only fake generation
-    setTimeout(async () => {
-      const { data: row } = await supabase.from('projects').select('input_image_url').eq('id', id).single();
-      await supabase.from('projects')
-        .update({
-          status: 'preview_ready',
-          preview_url: row?.input_image_url || 'https://picsum.photos/800/500'
-        })
-        .eq('id', id);
-    }, 5000);
+        let previewUrl;
+        switch (PREVIEW_PROVIDER) {
+          case 'decor8':
+          default:
+            previewUrl = await runPreviewWithDecor8(id, p.input_image_url);
+            break;
+        }
+
+        await supabase.from('projects')
+          .update({ status: 'preview_ready', preview_url: previewUrl })
+          .eq('id', id);
+      } catch (err) {
+        console.error('Preview worker failed:', err);
+        await supabase.from('projects').update({ status: 'failed' }).eq('id', id);
+      }
+    })();
+
   } catch (err) {
-    res.status(500).json({ ok:false, error: String(err.message || err) });
+    console.error(err);
+    res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 });
 
 // build-without-preview (NEW)
 app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+  const { id } = req.params;
   try {
-    const { id } = req.params;
-    const { data, error } = await supabase
-      .from('projects')
-      .update({ status: 'planning' })
-      .eq('id', id)
-      .select()
-      .single();
-    if (error) throw error;
-    res.json({ ok: true, project: data, plan: { steps: [], materials: [] } });
+    const { data: proj, error: pe } = await supabase.from('projects')
+      .select('id, name, budget, skill_level, input_image_url')
+      .eq('id', id).single();
+    if (pe) throw pe;
+
+    let plan;
+    switch (PLAN_PROVIDER) {
+      case 'openai':
+      default:
+        plan = await buildPlanWithOpenAI(proj);
+        break;
+    }
+
+    const { error: ue } = await supabase.from('projects')
+      .update({ status: 'planning', plan_json: plan })
+      .eq('id', id);
+    if (ue) throw ue;
+
+    res.json({ ok: true, plan });
   } catch (err) {
-    res.status(500).json({ ok:false, error: String(err.message || err) });
+    console.error(err);
+    res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 });
 
