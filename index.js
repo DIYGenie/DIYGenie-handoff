@@ -194,36 +194,53 @@ app.get('/api/projects/:id', async (req, res) => {
   res.json({ ok:true, item: data });
 });
 
-// --- Generate preview (alias both paths just in case the app calls either) ---
-async function markReady(id) {
-  const { error } = await supabase
-    .from('projects')
-    .update({
-      status: 'preview_ready',
-      preview_url: 'https://placehold.co/1200x800/png?text=DIY+Genie+Preview'
-    })
-    .eq('id', id);
-  if (error) console.error('[PREVIEW][update->ready] error:', error);
+// --- Preview helpers ---
+async function setProjectFields(id, fields) {
+  const { error } = await supabase.from('projects').update(fields).eq('id', id);
+  if (error) throw error;
+  return { ok: true };
 }
 
-for (const path of ['/api/projects/:id/preview', '/api/projects/:id/request_preview']) {
-  app.post(path, async (req, res) => {
-    const { id } = req.params;
-    console.log('[PREVIEW] request for project:', id, 'path:', path);
-
-    // mark "in progress" (log any failure so we see RLS or other issues)
-    const { error } = await supabase
-      .from('projects')
-      .update({ status: 'preview_in_progress' })
-      .eq('id', id);
-    if (error) console.error('[PREVIEW][update->in_progress] error:', error);
-
-    // ⬅️ TEMP: finish immediately so UI stops spinning
-    await markReady(id);
-
+// Start preview (immediate ack + flip to ready after 5s with placeholder image)
+async function startPreview(req, res) {
+  const { id } = req.params;
+  try {
+    await setProjectFields(id, { status: 'preview_requested' });
+    // simulate generation
+    setTimeout(async () => {
+      try {
+        await setProjectFields(id, {
+          status: 'preview_ready',
+          preview_url: `https://picsum.photos/seed/${id}/1200/800`,
+        });
+      } catch (_) { /* swallow */ }
+    }, 5000);
     res.json({ ok: true });
-  });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
 }
+
+// Force ready now (handy for manual unstick & testing)
+async function forceReady(req, res) {
+  const { id } = req.params;
+  try {
+    await setProjectFields(id, {
+      status: 'preview_ready',
+      preview_url: `https://picsum.photos/seed/${id}/1200/800`,
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+}
+
+// Routes (both POST and GET for convenience in browser)
+app.post('/api/projects/:id/preview', startPreview);
+app.get ('/api/projects/:id/preview',  startPreview); // optional
+
+app.post('/api/projects/:id/force-ready', forceReady);
+app.get ('/api/projects/:id/force-ready',  forceReady); // optional
 
 // Build without preview
 app.patch('/api/projects/:id/build_without_preview', async (req, res) => {
