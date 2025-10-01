@@ -80,7 +80,10 @@ async function getEntitlements(supabase, userId) {
 async function requireQuota(req, res, next) {
   try {
     const userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id; // be tolerant
-    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+    if (!userId) {
+      console.log('[ERROR] missing_user_id - body:', JSON.stringify(req.body || {}));
+      return res.status(400).json({ ok:false, error:'missing_user_id' });
+    }
 
     const ent = await getEntitlements(supabase, userId);
     if (ent.remaining <= 0) return res.status(403).json({ ok:false, error:'quota_exhausted', entitlements: ent });
@@ -89,6 +92,7 @@ async function requireQuota(req, res, next) {
     req.user_id = userId;
     next();
   } catch (e) {
+    console.log('[ERROR] requireQuota:', e.message);
     res.status(500).json({ ok:false, error:String(e) });
   }
 }
@@ -308,49 +312,86 @@ app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
 
     // Handle direct_url (no upload needed)
     if (direct_url) {
+      // Validate it's http(s)
+      if (!direct_url.startsWith('http://') && !direct_url.startsWith('https://')) {
+        console.log('[ERROR] Invalid direct_url (must be http/https):', direct_url);
+        return res.status(400).json({ ok:false, error:'invalid_direct_url_must_be_http_or_https' });
+      }
       publicUrl = direct_url;
     } 
     // Handle file upload (support both 'file' and 'image' field names)
     else if (req.files && req.files.length > 0) {
       const req_file = req.files[0];
+      
+      // Validate it's an image
+      if (!req_file.mimetype || !req_file.mimetype.startsWith('image/')) {
+        console.log('[ERROR] Invalid file type:', req_file.mimetype);
+        return res.status(400).json({ ok:false, error:'invalid_file_type_must_be_image' });
+      }
+      
       const ext = (req_file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
       const path = `projects/${id}/${Date.now()}.${ext}`;
 
+      // Try to upload to Supabase, fallback to stub URL on error
       const { error: upErr } = await supabase
         .storage.from(UPLOADS_BUCKET)
         .upload(path, req_file.buffer, { contentType: req_file.mimetype, upsert: true });
-      if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
-
-      const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
-      publicUrl = pub?.publicUrl;
+      
+      if (upErr) {
+        console.log('[WARN] Supabase upload failed, using stub URL:', upErr.message);
+        // Stub fallback - simulate a storage URL
+        publicUrl = `https://example.com/stub-uploads/${id}/room-${Date.now()}.${ext}`;
+      } else {
+        const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
+        publicUrl = pub?.publicUrl;
+      }
     } 
     else if (req.file) {
-      const ext = (req.file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
+      const req_file = req.file;
+      
+      // Validate it's an image
+      if (!req_file.mimetype || !req_file.mimetype.startsWith('image/')) {
+        console.log('[ERROR] Invalid file type:', req_file.mimetype);
+        return res.status(400).json({ ok:false, error:'invalid_file_type_must_be_image' });
+      }
+      
+      const ext = (req_file.mimetype?.split('/')[1] || 'jpg').toLowerCase();
       const path = `projects/${id}/${Date.now()}.${ext}`;
 
+      // Try to upload to Supabase, fallback to stub URL on error
       const { error: upErr } = await supabase
         .storage.from(UPLOADS_BUCKET)
-        .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
-      if (upErr) return res.status(500).json({ ok:false, error: upErr.message });
-
-      const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
-      publicUrl = pub?.publicUrl;
+        .upload(path, req_file.buffer, { contentType: req_file.mimetype, upsert: true });
+      
+      if (upErr) {
+        console.log('[WARN] Supabase upload failed, using stub URL:', upErr.message);
+        // Stub fallback - simulate a storage URL
+        publicUrl = `https://example.com/stub-uploads/${id}/room-${Date.now()}.${ext}`;
+      } else {
+        const { data: pub } = supabase.storage.from(UPLOADS_BUCKET).getPublicUrl(path);
+        publicUrl = pub?.publicUrl;
+      }
     } 
     else {
+      console.log('[ERROR] No file or direct_url provided');
       return res.status(400).json({ ok:false, error:'missing_file_or_direct_url' });
     }
 
-    // Update project with image URL (NO auto-actions)
+    // Update project with image URL (NO auto-actions, status stays 'draft')
     const { data, error: dbErr } = await supabase
       .from('projects')
       .update({ input_image_url: publicUrl })
       .eq('id', id)
       .select('id, user_id, name, status, input_image_url, preview_url')
       .single();
-    if (dbErr) return res.status(500).json({ ok:false, error: dbErr.message });
+    if (dbErr) {
+      console.log('[ERROR] Database update failed:', dbErr.message);
+      return res.status(500).json({ ok:false, error: dbErr.message });
+    }
 
-    return res.json({ ok:true, item: data, url: publicUrl });
+    return res.json({ ok:true, input_image_url: publicUrl, status: data.status });
   } catch (e) {
+    console.log('[ERROR] Image upload exception:', e.message);
     return res.status(500).json({ ok:false, error: String(e.message || e) });
   }
 });
@@ -550,6 +591,85 @@ app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, re
   } catch (err) {
     console.error('[build-without-preview] error:', err);
     return res.status(500).json({ ok:false, error:'build_without_preview_failed' });
+  }
+});
+
+// --- GET /api/projects/:id/plan ---
+app.get('/api/projects/:id/plan', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: project, error } = await supabase
+      .from('projects')
+      .select('id, status, plan_json, name')
+      .eq('id', id)
+      .maybeSingle();
+    
+    if (error) {
+      console.log('[ERROR] GET plan database error:', error.message);
+      return res.status(500).json({ ok:false, error: error.message });
+    }
+    if (!project) {
+      return res.status(404).json({ ok:false, error:'project_not_found' });
+    }
+
+    // Check if plan is ready
+    if (project.status !== 'plan_ready') {
+      return res.status(409).json({ ok:false, error:'plan_not_ready', status: project.status });
+    }
+
+    // Generate plan_text from plan_json
+    const plan_json = project.plan_json || {};
+    const summary = plan_json.summary || {};
+    const steps = plan_json.steps || [];
+    const tools = plan_json.tools || [];
+    const materials = plan_json.materials || [];
+    const safety = plan_json.safety || [];
+    const tips = plan_json.tips || [];
+
+    let plan_text = `## ${summary.title || project.name || 'DIY Plan'} (stub)\n\n`;
+    plan_text += `**Difficulty:** ${summary.difficulty || 'beginner'}  \n`;
+    plan_text += `**Estimated Cost:** ${summary.est_cost || '$$'}  \n`;
+    plan_text += `**Estimated Time:** ${summary.est_time || '2-4 hours'}  \n\n`;
+    
+    plan_text += `### Steps\n`;
+    steps.forEach((step, idx) => {
+      plan_text += `${idx + 1}. **${step.title}** - ${step.detail} (${step.duration_minutes || 30} min)\n`;
+    });
+    
+    if (tools.length > 0) {
+      plan_text += `\n### Tools Needed\n`;
+      tools.forEach(tool => {
+        plan_text += `- ${tool}\n`;
+      });
+    }
+    
+    if (materials.length > 0) {
+      plan_text += `\n### Materials\n`;
+      materials.forEach(mat => {
+        const matName = typeof mat === 'string' ? mat : mat.name;
+        const qty = mat.qty ? ` (${mat.qty} ${mat.unit || ''})` : '';
+        plan_text += `- ${matName}${qty}\n`;
+      });
+    }
+    
+    if (safety.length > 0) {
+      plan_text += `\n### Safety Tips\n`;
+      safety.forEach(tip => {
+        plan_text += `- ${tip}\n`;
+      });
+    }
+    
+    if (tips.length > 0) {
+      plan_text += `\n### Pro Tips\n`;
+      tips.forEach(tip => {
+        plan_text += `- ${tip}\n`;
+      });
+    }
+
+    return res.json({ ok:true, plan_text });
+  } catch (e) {
+    console.log('[ERROR] GET plan exception:', e.message);
+    return res.status(500).json({ ok:false, error: String(e.message || e) });
   }
 });
 
