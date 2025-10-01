@@ -1,0 +1,68 @@
+You are Agent 3 working on DIYGenieTheme. Implement a “Plan Outline” summary BELOW the existing “Open Plan” button on ProjectDetailsScreen, using the same stubbed plan data as the PlanTabs. No network calls.
+
+Acceptance
+- ProjectDetailsScreen shows, in order:
+  1) Header
+  2) Room Photo
+  3) Open Plan (existing button, unchanged behavior)
+  4) NEW: Plan Outline card summarizing the 4 tabs:
+     • Overview – total steps count + first 3 step titles
+     • Materials – total items count + first 3 lines “• qty × name”
+     • Tools – total tools count + first 3 lines “• name”
+     • AI Tips – total tips count + first 3 bullet snippets
+- Outline uses a single shared stub source so the Outline and PlanTabs match.
+- Tapping “Open Plan” still navigates to PlanTabs(projectId) with the same stub data (pass via params or shared hook).
+- Styling: white card(s), subtle dividers, compact rows, icons per section, on-brand typography and spacing. No gradients on Details screen.
+- If any list has fewer than 3 items, show what’s available; if empty, show “No items yet”.
+- Absolutely NO auto-actions and NO network calls for Outline/Tabs.
+- Blank/invalid projectId shows a friendly empty state.
+
+Tasks
+1) Create a shared stub module, e.g. app/lib/planStubs.ts:
+   export function getPlanStubs(projectId: string) {
+     return {
+       overview: { steps: [ {id,title}, ... ] },
+       materials: [ {id,name,qty,unit?,estCost?}, ... ],
+       tools: [ {id,name,alt?}, ... ],
+       tips: [ {id,body}, ... ],
+     }
+   }
+   • Generate deterministic content from projectId (hash) so it “feels” unique per project.
+   • Keep sizes small (e.g., 6–10 items per section). No network.
+
+2) PlanTabs screen
+   • Ensure it can receive either plan data via route params OR call getPlanStubs(projectId) itself.
+   • Keep four tabs: Overview, Materials, Tools, AI Tips, rendered from the stubs.
+   • No design changes to tabs beyond ensuring data parity with Outline.
+
+3) ProjectDetailsScreen
+   • Import getPlanStubs(projectId) and memoize the result.
+   • Render a “Plan Outline” card BELOW the existing CTA button using the same data.
+   • Section layout:
+       - Row header with icon + title + small count badge (e.g., “8”)
+       - Up to 3 preview lines (truncated to one line with ellipsis)
+       - Subtle divider between sections
+   • Accessibility: proper headings/labels and hit targets (even though rows aren’t clickable).
+   • Make sure colors / spacing match our current white-card look used elsewhere.
+
+4) Error handling / empty states
+   • If projectId missing: show an empty Plan Outline state card (“Plan details not available yet”).
+   • Never crash if any field is undefined.
+
+5) New Project page: do NOT change behavior, gating, or API calls here. This task only adds the Outline and keeps PlanTabs data in sync.
+
+6) Quick self-test script
+   • Open any existing project → Project Details
+   • Confirm “Open Plan” button present
+   • Confirm “Plan Outline” card shows counts + the first 3 preview lines per section
+   • Tap “Open Plan” → see 4 tabs with the same content as Outline (counts match)
+   • Confirm no network calls were made for Outline/Tabs in DevTools Network panel
+
+Deliverables
+- app/lib/planStubs.ts (shared deterministic stubs)
+- Updated ProjectDetailsScreen rendering the Outline under the button
+- PlanTabs consuming the same stub data (via params or shared function)
+- Minor styling utilities if needed (card, divider)
+- Short note in replit.md explaining Outline is stubbed and mirrors PlanTabs
+
+Do not modify backend calls or entitlements. Keep everything stubbed for cost control.

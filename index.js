@@ -15,10 +15,22 @@ app.use((req, res, next) => {
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY   // service key (bypasses RLS for server)
-);
+// Fail fast if Supabase service role key is missing
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error('[FATAL] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables');
+  console.error('[FATAL] SUPABASE_URL:', SUPABASE_URL ? 'set' : 'MISSING');
+  console.error('[FATAL] SUPABASE_SERVICE_KEY:', SUPABASE_SERVICE_KEY ? 'set' : 'MISSING');
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
+  console.warn('[WARN] Running in dev mode without service key - operations may fail');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+console.log('[INIT] Supabase client created with service role key');
 
 const UPLOADS_BUCKET = process.env.EXPO_PUBLIC_UPLOADS_BUCKET || "uploads";
 
@@ -278,12 +290,20 @@ app.get('/api/projects/:id', async (req, res) => {
 // --- Projects: CREATE ---
 app.post('/api/projects', requireQuota, async (req, res) => {
   try {
-    const { user_id, name, input_image_url, budget, skill } = req.body || {};
+    const { user_id, name, budget, skill } = req.body || {};
+    
+    // Validate name (≥10 chars)
+    const trimmedName = (name || '').trim();
+    if (trimmedName.length < 10) {
+      console.log('[ERROR] Invalid name (must be ≥10 chars):', trimmedName);
+      return res.status(400).json({ ok:false, error:'name_must_be_at_least_10_characters' });
+    }
+    
     const insert = {
       user_id: user_id || '00000000-0000-0000-0000-000000000001',
-      name: name || 'Untitled',
+      name: trimmedName,
       status: 'draft',
-      input_image_url: input_image_url || null,
+      input_image_url: null,
       preview_url: null,
     };
     
@@ -296,9 +316,15 @@ app.post('/api/projects', requireQuota, async (req, res) => {
       .insert(insert)
       .select()
       .single();
-    if (error) return res.status(500).json({ ok:false, error: error.message });
-    return res.json({ ok:true, item: data });
+    
+    if (error) {
+      console.log('[ERROR] Database insert failed:', error.message, error);
+      return res.status(500).json({ ok:false, error: error.message });
+    }
+    
+    return res.json({ ok:true, id: data.id, status: data.status });
   } catch (e) {
+    console.log('[ERROR] POST /api/projects exception:', e.message);
     return res.status(500).json({ ok:false, error: String(e.message || e) });
   }
 });

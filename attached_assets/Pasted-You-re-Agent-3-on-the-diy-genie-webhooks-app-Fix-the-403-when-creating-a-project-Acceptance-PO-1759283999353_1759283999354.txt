@@ -1,0 +1,38 @@
+You’re Agent 3 on the diy-genie-webhooks app. Fix the 403 when creating a project.
+
+Acceptance:
+- POST /api/projects returns {ok:true, id:<uuid>} with status 200 (no 403).
+- Uses Supabase **service role** key on the server for inserts/updates.
+- If service role key is missing or miswired, add DEV fallback so local runs still work:
+  - Option A (preferred): Add Supabase RLS policies for dev to allow anon insert/select/update on “projects” (and read on “project_images”). Provide the exact SQL and apply it.
+  - Option B (temporary): keep current DB but add an in-memory stub store behind a DEV flag (NODE_ENV!=='production'). The REST behavior must match DB shape.
+
+Tasks:
+1) Audit env + client:
+   - Ensure we create the Supabase **server client** with SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (not the anon key) in index.js (or wherever the client is created). Fail fast with a clear log if missing.
+   - Confirm POST /api/projects uses that server client.
+
+2) Fix /api/projects:
+   - Expect body: { user_id, name, budget, skill }. Validate and trim name ≥10 chars.
+   - Insert row into “projects” with status='draft'. Return {ok:true, id, status:'draft'}.
+   - On DB error, return {ok:false, error:<message>} with 500 and log the full error. Never return HTML.
+
+3) Keep existing endpoints intact:
+   - GET /api/projects?user_id=... returns items including new project.
+   - POST /api/projects/:id/image requires the project to exist and returns {ok:true, input_image_url}.
+   - No auto-actions on upload; status stays 'draft'.
+
+4) If you had to add dev RLS policies, apply:
+   - projects: allow anon/select/insert/update with TRUE for dev.
+   - project_images (or equivalent): allow anon/select/insert with TRUE for dev.
+   Provide the SQL you executed in a code block at the end of your summary.
+
+5) Add a quick self-test:
+   - Create a project with a fake user_id.
+   - Verify the id is returned (200).
+   - GET it back via /api/projects?user_id=...
+   - POST /api/projects/:id/image with a direct_url and see {ok:true}.
+
+6) Keep responses small and JSON only. Don’t affect entitlements logic.
+
+When done, print a short checklist showing each endpoint and the returned status codes, plus any SQL you applied.
