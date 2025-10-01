@@ -93,9 +93,14 @@ async function requirePreviewOrBuildQuota(req, res, next) {
   try {
     let userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id;
     
-    // Handle "auto" user_id - create temporary user
+    // Handle "auto" user_id - create temporary user with valid UUID
     if (userId === 'auto') {
-      userId = '00000000-0000-0000-0000-' + Math.random().toString(36).substr(2, 12).padEnd(12, '0');
+      // Generate valid UUID v4
+      userId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
       req.user_id = userId;
       // Auto-create profile with free tier
       await supabase.from('profiles').insert({ user_id: userId, plan_tier: 'free' }).select().single();
@@ -295,9 +300,14 @@ app.post('/api/projects', async (req, res) => {
   try {
     let { user_id, name, budget, skill } = req.body || {};
     
-    // Handle "auto" user_id - create temporary user
+    // Handle "auto" user_id - create temporary user with valid UUID
     if (user_id === 'auto') {
-      user_id = '00000000-0000-0000-0000-' + Math.random().toString(36).substr(2, 12).padEnd(12, '0');
+      // Generate valid UUID v4
+      user_id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
       // Auto-create profile with free tier
       await supabase.from('profiles').insert({ user_id, plan_tier: 'free' }).select().single();
     }
