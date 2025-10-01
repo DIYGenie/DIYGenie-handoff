@@ -1,0 +1,57 @@
+Goal: Stop the POST /api/projects 403. Creation must always be allowed; plan/quota limits apply only to preview and build.
+
+You are working in the Webhooks (backend) repl for DIY Genie. Do the following exactly.
+
+CONTEXT
+- Frontend base URL: https://api.diygenieapp.com
+- App sends: POST /api/projects → then POST /api/projects/:id/image (FormData key = "image") OR direct_url.
+- Tiers from spec: 
+  - free: projects allowed, NO preview, NO plan builds
+  - casual: 5 previews+plans
+  - pro: 25 previews+plans
+- Current bug: POST /api/projects returns 403 in the app (Network tab shows “projects POST 403”). We must never block project creation. Only gate preview/build.
+
+TASKS
+1) Entitlements/Policy
+   - Ensure `POST /api/projects` and `POST /api/projects/:id/image` are **never gated** by plan tier. Always return `{ok:true, id}` (creation) or `{ok:true}` (image) on success.
+   - Keep gating ONLY these endpoints:
+     - `POST /api/projects/:id/preview` → require previewAllowed=true and remaining>0
+     - `POST /api/projects/:id/build-without-preview` → require remaining>0
+   - If gated, respond `{ok:false, error:"upgrade_required"}` with HTTP 403.
+
+2) Image Upload
+   - Accept **both** multipart (FormData key EXACTLY "image") and `direct_url`.
+   - On success, set `input_image_url` on the project and **do not** auto-start anything.
+   - Return `{ok:true}` immediately.
+
+3) CORS & Errors
+   - Confirm CORS allows the Expo dev origins and production domain.
+   - Standardize errors as `{ok:false, error:"<code>"}` (no HTML error pages).
+
+4) Tests (create & upload happy-path)
+   - Use a temporary user id internally (auto-create if missing) so NO manual IDs are required.
+   - curl tests (replace $BASE once; keep the same project id across calls):
+     # create
+     PID=$(curl -sS -X POST "$BASE/api/projects" -H 'content-type: application/json' \
+       --data '{"name":"Test Project","user_id":"auto"}' | jq -r '.id')
+     echo $PID
+     # attach direct url
+     curl -sS -X POST "$BASE/api/projects/$PID/image" -H 'content-type: application/json' \
+       --data '{"direct_url":"https://picsum.photos/800/600.jpg","user_id":"auto"}' | jq
+     # forbidden preview (free tier)
+     curl -sS -X POST "$BASE/api/projects/$PID/preview" -H 'content-type: application/json' \
+       --data '{"user_id":"auto"}' | jq
+
+   EXPECTED:
+   - create: 200 → {ok:true, id:"..."}
+   - image: 200 → {ok:true}
+   - preview: 403 → {ok:false, error:"upgrade_required"}
+
+ACCEPTANCE CRITERIA
+- Creating a project never returns 403.
+- Image endpoint accepts FormData key "image" and "direct_url".
+- Preview/Build enforce tier & remaining; return 403 upgrade_required when blocked.
+- All responses are JSON (no HTML).
+- No auto-actions on image upload.
+
+Deliver: list of touched files + a short summary.

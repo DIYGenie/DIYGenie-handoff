@@ -88,39 +88,41 @@ async function getEntitlements(supabase, userId) {
   };
 }
 
-// Simple guards
-async function requireQuota(req, res, next) {
+// Middleware to check preview/build quota (for preview and build endpoints only)
+async function requirePreviewOrBuildQuota(req, res, next) {
   try {
-    const userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id; // be tolerant
+    let userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id;
+    
+    // Handle "auto" user_id - create temporary user
+    if (userId === 'auto') {
+      userId = '00000000-0000-0000-0000-' + Math.random().toString(36).substr(2, 12).padEnd(12, '0');
+      req.user_id = userId;
+      // Auto-create profile with free tier
+      await supabase.from('profiles').insert({ user_id: userId, plan_tier: 'free' }).select().single();
+    }
+    
     if (!userId) {
       console.log('[ERROR] missing_user_id - body:', JSON.stringify(req.body || {}));
       return res.status(400).json({ ok:false, error:'missing_user_id' });
     }
 
     const ent = await getEntitlements(supabase, userId);
-    if (ent.remaining <= 0) return res.status(403).json({ ok:false, error:'quota_exhausted', entitlements: ent });
+    
+    // Check if preview is allowed (for preview endpoint)
+    if (!ent.previewAllowed) {
+      return res.status(403).json({ ok:false, error:'upgrade_required' });
+    }
+    
+    // Check if quota remaining (for both preview and build)
+    if (ent.remaining <= 0) {
+      return res.status(403).json({ ok:false, error:'upgrade_required' });
+    }
 
     req.entitlements = ent;
     req.user_id = userId;
     next();
   } catch (e) {
-    console.log('[ERROR] requireQuota:', e.message);
-    res.status(500).json({ ok:false, error:String(e) });
-  }
-}
-
-async function requirePreviewAllowed(req, res, next) {
-  try {
-    const userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id;
-    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
-
-    const ent = await getEntitlements(supabase, userId);
-    if (!ent.previewAllowed) return res.status(403).json({ ok:false, error:'preview_not_in_plan', entitlements: ent });
-
-    req.entitlements = ent;
-    req.user_id = userId;
-    next();
-  } catch (e) {
+    console.log('[ERROR] requirePreviewOrBuildQuota:', e.message);
     res.status(500).json({ ok:false, error:String(e) });
   }
 }
@@ -288,9 +290,17 @@ app.get('/api/projects/:id', async (req, res) => {
 });
 
 // --- Projects: CREATE ---
-app.post('/api/projects', requireQuota, async (req, res) => {
+// NEVER gated - project creation is always allowed regardless of tier
+app.post('/api/projects', async (req, res) => {
   try {
-    const { user_id, name, budget, skill } = req.body || {};
+    let { user_id, name, budget, skill } = req.body || {};
+    
+    // Handle "auto" user_id - create temporary user
+    if (user_id === 'auto') {
+      user_id = '00000000-0000-0000-0000-' + Math.random().toString(36).substr(2, 12).padEnd(12, '0');
+      // Auto-create profile with free tier
+      await supabase.from('profiles').insert({ user_id, plan_tier: 'free' }).select().single();
+    }
     
     // Validate name (≥10 chars)
     const trimmedName = (name || '').trim();
@@ -322,7 +332,7 @@ app.post('/api/projects', requireQuota, async (req, res) => {
       return res.status(500).json({ ok:false, error: error.message });
     }
     
-    return res.json({ ok:true, id: data.id, status: data.status });
+    return res.json({ ok:true, id: data.id });
   } catch (e) {
     console.log('[ERROR] POST /api/projects exception:', e.message);
     return res.status(500).json({ ok:false, error: String(e.message || e) });
@@ -404,18 +414,17 @@ app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
     }
 
     // Update project with image URL (NO auto-actions, status stays 'draft')
-    const { data, error: dbErr } = await supabase
+    const { error: dbErr } = await supabase
       .from('projects')
       .update({ input_image_url: publicUrl })
-      .eq('id', id)
-      .select('id, user_id, name, status, input_image_url, preview_url')
-      .single();
+      .eq('id', id);
+    
     if (dbErr) {
       console.log('[ERROR] Database update failed:', dbErr.message);
       return res.status(500).json({ ok:false, error: dbErr.message });
     }
 
-    return res.json({ ok:true, input_image_url: publicUrl, status: data.status });
+    return res.json({ ok:true });
   } catch (e) {
     console.log('[ERROR] Image upload exception:', e.message);
     return res.status(500).json({ ok:false, error: String(e.message || e) });
@@ -424,7 +433,8 @@ app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
 
 // --- Preview generation route ------------------------------------------------
 // POST /api/projects/:id/preview
-app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) => {
+// Gated by tier - requires previewAllowed and remaining quota
+app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, res) => {
   try {
     const { id } = req.params;
     const { room_type, design_style } = req.body || {};
@@ -511,7 +521,8 @@ app.post('/api/projects/:id/preview', requirePreviewAllowed, async (req, res) =>
 
 // --- Build without preview route --------------------------------------------
 // POST /api/projects/:id/build-without-preview
-app.post('/api/projects/:id/build-without-preview', requireQuota, async (req, res) => {
+// Gated by tier - requires remaining quota (free tier blocked via previewAllowed check)
+app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, async (req, res) => {
   try {
     const { id } = req.params;
     const { description, budget, skill_level } = req.body || {};
