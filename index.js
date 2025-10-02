@@ -279,7 +279,7 @@ app.get('/api/me/entitlements/:userId', async (req, res) => {
 app.get('/me/entitlements', async (req, res) => {
   try {
     const userId = req.query.user_id;
-    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+    if (!userId) return res.status(400).json({ error: 'user_id_required' });
     const ent = await getEntitlements(supabase, userId);
     res.json({ ok:true, ...ent });
   } catch (e) {
@@ -399,25 +399,22 @@ app.post('/api/billing/upgrade', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'unknown_tier' });
     }
 
-    // Dev stub: In production, this would update the profile tier
-    // In dev environment without auth.users table populated, we'll just return success
-    // The profile tier can be manually managed via SQL or will be synced from Stripe webhooks in production
-    
-    // Try to update profile (won't work if user doesn't exist in auth.users table)
-    const { error: updateError } = await supabase
-      .from('profiles')
-      .update({ plan_tier: tier })
-      .eq('user_id', user_id);
+    console.info('[billing] upgrade', { user_id, tier });
 
-    // Log any errors but still return success (dev stub behavior)
-    if (updateError) {
-      console.log(`[INFO] Profile update skipped for ${user_id} (dev stub mode):`, updateError.message);
+    // Upsert: insert if doesn't exist, update if exists
+    const { error } = await supabase
+      .from('profiles')
+      .upsert({ user_id, plan_tier: tier }, { onConflict: 'user_id' });
+
+    if (error) {
+      console.error('[ERROR] Upgrade failed:', error.message);
+      return res.status(500).json({ ok: false, error: error.message });
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, tier });
   } catch (e) {
     console.error('[ERROR] Upgrade failed:', e.message);
-    res.status(500).json({ ok: false, error: 'upgrade_failed' });
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
