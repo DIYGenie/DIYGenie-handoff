@@ -1,0 +1,78 @@
+add safe default redirect URLs and lightweight pages; update existing checkout/portal handlers to use them when env vars are missing.
+Files to touch: index.js (or your main Express entry). No new files, no renames, no deps.
+
+Task
+
+Implement server-side fallbacks so Stripe flows work even if SUCCESS_URL, CANCEL_URL, and PORTAL_RETURN_URL are not set. Add three tiny HTML endpoints users land on after Stripe:
+
+GET /billing/success
+
+GET /billing/cancel
+
+GET /billing/portal-return
+
+Then modify existing handlers to use these defaults when envs are missing.
+
+Implementation (edit in place)
+
+Utility to compute base URL (top-level in index.js):
+
+Add function getBaseUrl(req) { const proto = req.headers['x-forwarded-proto'] || req.protocol; const host = req.headers['x-forwarded-host'] || req.get('host'); return \${proto}://${host}`; }`
+
+Lightweight HTML pages (before error middleware):
+
+Add three routes:
+
+GET /billing/success
+
+GET /billing/cancel
+
+GET /billing/portal-return
+
+Each should:
+
+set headers: Cache-Control: no-store, X-Content-Type-Options: nosniff
+
+res.status(200).type('html').send(\<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DIY Genie</title><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:40px auto;padding:20px;line-height:1.5"><h1>All set 🎉</h1><p>You can return to the DIY Genie app now.</p><p style="opacity:.7">If this tab didn’t close automatically, just switch back to the app.</p></body>`);`
+
+For /billing/cancel, change heading to “Checkout canceled” and copy accordingly.
+
+For /billing/portal-return, heading “Portal closed”.
+
+Update Checkout handler (POST /api/billing/checkout):
+
+Inside the handler, derive:
+
+const base = getBaseUrl(req);
+
+const successUrl = process.env.SUCCESS_URL || \${base}/billing/success`;`
+
+const cancelUrl = process.env.CANCEL_URL || \${base}/billing/cancel`;`
+
+Pass those to stripe.checkout.sessions.create({ success_url: successUrl, cancel_url: cancelUrl, ... }).
+
+If using fallbacks (env missing), console.info('[billing] Using fallback success/cancel URLs', { successUrl, cancelUrl });
+
+Update Portal handler (POST /api/billing/portal):
+
+Add:
+
+const base = getBaseUrl(req);
+
+const returnUrl = process.env.PORTAL_RETURN_URL || \${base}/billing/portal-return`;`
+
+Pass to stripe.billingPortal.sessions.create({ return_url: returnUrl, customer }).
+
+If fallback used, console.info('[billing] Using fallback portal return URL', { returnUrl });
+
+Do not change any /api/projects/* handlers, existing GET /me/entitlements/:userId, or tests other than minimal logging. No new dependencies.
+
+Acceptance criteria
+
+Hitting POST /api/billing/checkout creates a session whose success_url/cancel_url point to your API host /billing/success and /billing/cancel when envs are unset.
+
+Hitting POST /api/billing/portal creates a portal session whose return_url points to /billing/portal-return when env is unset.
+
+Visiting each of /billing/success, /billing/cancel, /billing/portal-return returns a simple 200 HTML page with the intended message (no secrets, no cache).
+
+No file additions; no renames; no dependency changes.

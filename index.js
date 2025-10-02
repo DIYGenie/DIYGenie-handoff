@@ -47,6 +47,13 @@ if (process.env.STRIPE_SECRET_KEY) {
 // Dev user the app uses in preview
 const DEV_USER = '00000000-0000-0000-0000-000000000001';
 
+// Utility to compute base URL for redirect fallbacks
+function getBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol;
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}`;
+}
+
 // --- ENTITLEMENTS CONFIG ---
 const TIER_RULES = {
   free:   { quota: 2,  preview: false },
@@ -303,8 +310,13 @@ app.post('/api/billing/checkout', async (req, res) => {
       return res.status(500).json({ ok: false, error: 'price_id_not_configured' });
     }
 
-    const successUrl = process.env.SUCCESS_URL || `${req.protocol}://${req.get('host')}/success`;
-    const cancelUrl = process.env.CANCEL_URL || `${req.protocol}://${req.get('host')}/cancel`;
+    const base = getBaseUrl(req);
+    const successUrl = process.env.SUCCESS_URL || `${base}/billing/success`;
+    const cancelUrl = process.env.CANCEL_URL || `${base}/billing/cancel`;
+
+    if (!process.env.SUCCESS_URL || !process.env.CANCEL_URL) {
+      console.info('[billing] Using fallback success/cancel URLs', { successUrl, cancelUrl });
+    }
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
@@ -355,7 +367,12 @@ app.post('/api/billing/portal', async (req, res) => {
     }
 
     // Create billing portal session
-    const returnUrl = process.env.CANCEL_URL || `${req.protocol}://${req.get('host')}/`;
+    const base = getBaseUrl(req);
+    const returnUrl = process.env.PORTAL_RETURN_URL || `${base}/billing/portal-return`;
+    
+    if (!process.env.PORTAL_RETURN_URL) {
+      console.info('[billing] Using fallback portal return URL', { returnUrl });
+    }
     
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
@@ -910,6 +927,31 @@ app.get('/api/projects/:id/force-ready', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok:false, error: String(e.message || e) });
   }
+});
+
+// --- Billing redirect pages ---
+app.get('/billing/success', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(200).type('html').send(
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DIY Genie</title><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:40px auto;padding:20px;line-height:1.5"><h1>All set 🎉</h1><p>You can return to the DIY Genie app now.</p><p style="opacity:.7">If this tab didn't close automatically, just switch back to the app.</p></body>`
+  );
+});
+
+app.get('/billing/cancel', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(200).type('html').send(
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DIY Genie</title><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:40px auto;padding:20px;line-height:1.5"><h1>Checkout canceled</h1><p>You can return to the DIY Genie app now.</p><p style="opacity:.7">If this tab didn't close automatically, just switch back to the app.</p></body>`
+  );
+});
+
+app.get('/billing/portal-return', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(200).type('html').send(
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DIY Genie</title><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:40px auto;padding:20px;line-height:1.5"><h1>Portal closed</h1><p>You can return to the DIY Genie app now.</p><p style="opacity:.7">If this tab didn't close automatically, just switch back to the app.</p></body>`
+  );
 });
 
 // --- Listen ---
