@@ -1,0 +1,72 @@
+Files to touch: index.js only. No new files/renames/deps.
+
+Goal
+Add POST /api/billing/checkout that returns a Stripe Checkout URL for the selected tier using env price ids, and uses the server fallback success/cancel pages if envs are unset.
+
+Implement (edit index.js)
+
+Stripe init (reuse if already present):
+
+// at top (reuse if defined)
+const Stripe = require('stripe');
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+
+Helper (reuse if already added in earlier step):
+
+function getBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol;
+  const host  = req.headers['x-forwarded-host']  || req.get('host');
+  return `${proto}://${host}`;
+}
+
+
+Route: POST /api/billing/checkout
+
+app.post('/api/billing/checkout', async (req, res) => {
+  try {
+    const { tier, user_id } = req.body || {};
+    if (!tier || !['casual','pro'].includes(tier)) {
+      return res.status(404).json({ ok:false, error:'unknown_tier' });
+    }
+
+    const priceId = tier === 'pro' ? process.env.PRO_PRICE_ID : process.env.CASUAL_PRICE_ID;
+    if (!priceId) {
+      return res.status(500).json({ ok:false, error:'missing_price_id' });
+    }
+
+    const base = getBaseUrl(req);
+    const success_url = process.env.SUCCESS_URL || `${base}/billing/success`;
+    const cancel_url  = process.env.CANCEL_URL  || `${base}/billing/cancel`;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url,
+      cancel_url,
+      allow_promotion_codes: true,
+      client_reference_id: user_id || 'anon',
+      metadata: { user_id: user_id || 'anon', tier },
+      subscription_data: { metadata: { user_id: user_id || 'anon', tier } },
+    });
+
+    console.info('[billing] checkout created', { tier, user_id, url: session.url });
+    return res.json({ ok:true, url: session.url });
+  } catch (e) {
+    console.error('[billing] checkout error', e);
+    return res.status(500).json({ ok:false, error: String(e.message || e) });
+  }
+});
+
+
+Acceptance
+
+POST /api/billing/checkout { tier:'casual', user_id:'e4cb3591-7272-46dd-b1f6-d7cc4e2f3d24' } → 200 { ok:true, url:'https://checkout.stripe.com/...' }
+
+POST /api/billing/checkout { tier:'pro', user_id:'...' } → returns { url }.
+
+If price id env missing, returns 500 { error:'missing_price_id' }.
+
+The success_url / cancel_url point to your API host /billing/success and /billing/cancel when envs are unset.
+
+No other routes modified.

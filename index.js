@@ -291,52 +291,38 @@ app.get('/me/entitlements', async (req, res) => {
 // POST /api/billing/checkout - Create Stripe checkout session
 app.post('/api/billing/checkout', async (req, res) => {
   try {
-    if (!stripe) {
-      return res.status(500).json({ ok: false, error: 'stripe_not_configured' });
-    }
-
     const { tier, user_id } = req.body || {};
     
     if (!tier || !['casual', 'pro'].includes(tier)) {
       return res.status(404).json({ ok: false, error: 'unknown_tier' });
     }
 
-    // Map tier to price ID from env
-    const priceId = tier === 'casual' 
-      ? process.env.CASUAL_PRICE_ID 
-      : process.env.PRO_PRICE_ID;
-
+    const priceId = tier === 'pro' ? process.env.PRO_PRICE_ID : process.env.CASUAL_PRICE_ID;
+    
     if (!priceId) {
-      return res.status(500).json({ ok: false, error: 'price_id_not_configured' });
+      return res.status(500).json({ ok: false, error: 'missing_price_id' });
     }
 
     const base = getBaseUrl(req);
-    const successUrl = process.env.SUCCESS_URL || `${base}/billing/success`;
-    const cancelUrl = process.env.CANCEL_URL || `${base}/billing/cancel`;
+    const success_url = process.env.SUCCESS_URL || `${base}/billing/success`;
+    const cancel_url = process.env.CANCEL_URL || `${base}/billing/cancel`;
 
-    if (!process.env.SUCCESS_URL || !process.env.CANCEL_URL) {
-      console.info('[billing] Using fallback success/cancel URLs', { successUrl, cancelUrl });
-    }
-
-    // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url,
+      cancel_url,
+      allow_promotion_codes: true,
       client_reference_id: user_id || 'anon',
+      metadata: { user_id: user_id || 'anon', tier },
+      subscription_data: { metadata: { user_id: user_id || 'anon', tier } },
     });
 
-    res.json({ url: session.url });
+    console.info('[billing] checkout created', { tier, user_id, url: session.url });
+    return res.json({ ok: true, url: session.url });
   } catch (e) {
-    console.error('[ERROR] Checkout session creation failed:', e.message);
-    res.status(500).json({ ok: false, error: 'checkout_failed' });
+    console.error('[billing] checkout error', e);
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
