@@ -329,46 +329,35 @@ app.post('/api/billing/checkout', async (req, res) => {
 // POST /api/billing/portal - Create Stripe billing portal session
 app.post('/api/billing/portal', async (req, res) => {
   try {
-    if (!stripe) {
-      return res.status(500).json({ ok: false, error: 'stripe_not_configured' });
-    }
-
-    const { customer_id, user_id } = req.body || {};
-    
-    let customerId = customer_id;
-
-    // If no customer_id but user_id provided, look it up
-    if (!customerId && user_id) {
-      const { data: profile } = await supabase
+    const { user_id, customer_id } = req.body || {};
+    const customerId = customer_id || (await (async () => {
+      if (!user_id) return null;
+      const { data: prof, error } = await supabase
         .from('profiles')
         .select('stripe_customer_id')
         .eq('user_id', user_id)
-        .single();
-      
-      customerId = profile?.stripe_customer_id;
-    }
+        .maybeSingle();
+      if (error) throw error;
+      return prof && prof.stripe_customer_id;
+    })());
 
     if (!customerId) {
       return res.status(501).json({ ok: false, error: 'no_customer' });
     }
 
-    // Create billing portal session
     const base = getBaseUrl(req);
-    const returnUrl = process.env.PORTAL_RETURN_URL || `${base}/billing/portal-return`;
-    
-    if (!process.env.PORTAL_RETURN_URL) {
-      console.info('[billing] Using fallback portal return URL', { returnUrl });
-    }
-    
+    const return_url = process.env.PORTAL_RETURN_URL || `${base}/billing/portal-return`;
+
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: returnUrl,
+      return_url,
     });
 
-    res.json({ url: session.url });
+    console.info('[billing] portal session', { user_id, customerId, url: session.url });
+    return res.json({ ok: true, url: session.url });
   } catch (e) {
-    console.error('[ERROR] Portal session creation failed:', e.message);
-    res.status(500).json({ ok: false, error: 'portal_failed' });
+    console.error('[billing] portal error', e);
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
