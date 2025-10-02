@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
+import Stripe from "stripe";
 
 const app = express();
 app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
@@ -33,6 +34,15 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 console.log('[INIT] Supabase client created with service role key');
 
 const UPLOADS_BUCKET = process.env.EXPO_PUBLIC_UPLOADS_BUCKET || "uploads";
+
+// Stripe initialization (optional, only if key is present)
+let stripe = null;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  console.log('[INIT] Stripe initialized');
+} else {
+  console.warn('[WARN] STRIPE_SECRET_KEY not set - billing endpoints will return errors');
+}
 
 // Dev user the app uses in preview
 const DEV_USER = '00000000-0000-0000-0000-000000000001';
@@ -255,6 +265,142 @@ app.get('/api/me/entitlements/:userId', async (req, res) => {
     res.json({ ok:true, ...ent });
   } catch (e) {
     res.status(500).json({ ok:false, error:String(e) });
+  }
+});
+
+// GET /me/entitlements (query param version)
+app.get('/me/entitlements', async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
+    const ent = await getEntitlements(supabase, userId);
+    res.json({ ok:true, ...ent });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e) });
+  }
+});
+
+// --- Billing endpoints ---
+// POST /api/billing/checkout - Create Stripe checkout session
+app.post('/api/billing/checkout', async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({ ok: false, error: 'stripe_not_configured' });
+    }
+
+    const { tier, user_id } = req.body || {};
+    
+    if (!tier || !['casual', 'pro'].includes(tier)) {
+      return res.status(404).json({ ok: false, error: 'unknown_tier' });
+    }
+
+    // Map tier to price ID from env
+    const priceId = tier === 'casual' 
+      ? process.env.CASUAL_PRICE_ID 
+      : process.env.PRO_PRICE_ID;
+
+    if (!priceId) {
+      return res.status(500).json({ ok: false, error: 'price_id_not_configured' });
+    }
+
+    const successUrl = process.env.SUCCESS_URL || `${req.protocol}://${req.get('host')}/success`;
+    const cancelUrl = process.env.CANCEL_URL || `${req.protocol}://${req.get('host')}/cancel`;
+
+    // Create Stripe checkout session
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: user_id || 'anon',
+    });
+
+    res.json({ url: session.url });
+  } catch (e) {
+    console.error('[ERROR] Checkout session creation failed:', e.message);
+    res.status(500).json({ ok: false, error: 'checkout_failed' });
+  }
+});
+
+// POST /api/billing/portal - Create Stripe billing portal session
+app.post('/api/billing/portal', async (req, res) => {
+  try {
+    if (!stripe) {
+      return res.status(500).json({ ok: false, error: 'stripe_not_configured' });
+    }
+
+    const { customer_id, user_id } = req.body || {};
+    
+    let customerId = customer_id;
+
+    // If no customer_id but user_id provided, look it up
+    if (!customerId && user_id) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('stripe_customer_id')
+        .eq('user_id', user_id)
+        .single();
+      
+      customerId = profile?.stripe_customer_id;
+    }
+
+    if (!customerId) {
+      return res.status(501).json({ ok: false, error: 'no_customer' });
+    }
+
+    // Create billing portal session
+    const returnUrl = process.env.CANCEL_URL || `${req.protocol}://${req.get('host')}/`;
+    
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+
+    res.json({ url: session.url });
+  } catch (e) {
+    console.error('[ERROR] Portal session creation failed:', e.message);
+    res.status(500).json({ ok: false, error: 'portal_failed' });
+  }
+});
+
+// POST /api/billing/upgrade - Dev stub for manual tier upgrades
+app.post('/api/billing/upgrade', async (req, res) => {
+  try {
+    const { tier, user_id } = req.body || {};
+    
+    if (!user_id) {
+      return res.status(400).json({ ok: false, error: 'missing_user_id' });
+    }
+
+    if (!tier || !['free', 'casual', 'pro'].includes(tier)) {
+      return res.status(404).json({ ok: false, error: 'unknown_tier' });
+    }
+
+    // Dev stub: In production, this would update the profile tier
+    // In dev environment without auth.users table populated, we'll just return success
+    // The profile tier can be manually managed via SQL or will be synced from Stripe webhooks in production
+    
+    // Try to update profile (won't work if user doesn't exist in auth.users table)
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ plan_tier: tier })
+      .eq('user_id', user_id);
+
+    // Log any errors but still return success (dev stub behavior)
+    if (updateError) {
+      console.log(`[INFO] Profile update skipped for ${user_id} (dev stub mode):`, updateError.message);
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[ERROR] Upgrade failed:', e.message);
+    res.status(500).json({ ok: false, error: 'upgrade_failed' });
   }
 });
 

@@ -1,0 +1,69 @@
+index.js (and optionally update tests/smoke.backend.mjs to cover the new routes). No new files, no renames, no deletions.
+
+Goal: Add minimal, production-ready billing endpoints that work with Stripe test keys now and will swap to live later via env. Keep everything behind env; no secrets returned to client.
+
+Implement:
+
+POST /api/billing/checkout
+
+Body: { tier: 'casual' | 'pro', user_id?: string } (user_id optional; forward if provided).
+
+Map tier → price id using env: CASUAL_PRICE_ID, PRO_PRICE_ID.
+
+Create Stripe Checkout Session (mode=subscription).
+
+Use env URLs: SUCCESS_URL, CANCEL_URL. Include client_reference_id = user_id || 'anon'.
+
+Return { url }.
+
+POST /api/billing/portal
+
+Body: { customer_id?: string, user_id?: string }.
+
+If you store stripe_customer_id in profiles, look it up by user_id; else respond 501 { error: 'no_customer' }.
+
+Create Stripe Billing Portal session; return { url }.
+
+POST /api/billing/upgrade (dev stub)
+
+Body: { tier: 'casual'|'pro'|'free', user_id: string } (require user_id).
+
+Upsert profiles row for user_id with plan_tier=tier.
+
+Return { ok: true }.
+
+Entitlements alias (non-breaking):
+
+Add GET /me/entitlements that accepts ?user_id=<uuid>; internally call existing logic you have for GET /me/entitlements/:userId.
+
+Keep your existing GET /me/entitlements/:userId as is.
+
+Env contract (read-only, no new secrets beyond Stripe key you already have):
+
+STRIPE_SECRET_KEY (already present)
+
+CASUAL_PRICE_ID, PRO_PRICE_ID
+
+SUCCESS_URL, CANCEL_URL (can be temporary for dev)
+
+Error handling:
+
+Return 404 for unknown tier; 501 when portal cannot be created due to missing customer; 500 with safe message otherwise.
+
+Acceptance criteria:
+
+POST /api/billing/checkout returns { url } with valid Stripe test link.
+
+POST /api/billing/portal returns { url } or 501 with { error: 'no_customer' }.
+
+POST /api/billing/upgrade updates profiles.plan_tier and responds { ok: true }.
+
+GET /me/entitlements?user_id=… returns { tier, quota, remaining, previewAllowed }.
+
+No breaking changes to existing /api/projects/* routes.
+
+Quick smoke additions (in tests/smoke.backend.mjs, keep tiny):
+
+After your current tests, POST /api/billing/upgrade to 'casual', then GET /me/entitlements?user_id=TEST_USER_ID and assert tier==='casual'.
+
+POST /api/billing/checkout { tier:'pro' } → assert response has url string.

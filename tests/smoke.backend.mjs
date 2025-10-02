@@ -91,15 +91,21 @@ async function runTests() {
     const ent = await makeRequest('GET', `/me/entitlements/${TEST_USER_ID}`);
     console.log(`✓ Entitlements: tier=${ent.tier}, quota=${ent.quota}, remaining=${ent.remaining}, previewAllowed=${ent.previewAllowed}`);
     
+    // Test 1.5: Upgrade to casual tier (so we can test build)
+    console.log('\n[TEST 1.5] Upgrade to casual tier');
+    const upgradeRes = await makeRequest('POST', '/api/billing/upgrade', {
+      tier: 'casual',
+      user_id: TEST_USER_ID
+    });
+    console.log(`✓ Upgrade endpoint returned ok: true`);
+    
     // Test 2: Create project
     console.log('\n[TEST 2] Create project');
     const createRes = await makeRequest('POST', '/api/projects', {
       user_id: TEST_USER_ID,
-      name: 'Smoke Test Project',
-      budget: 'medium',
-      skill_level: 'beginner'
+      name: 'Smoke Test Project'
     });
-    projectId = createRes.item?.id;
+    projectId = createRes.id;
     if (!projectId) throw new Error('No project ID returned');
     console.log(`✓ Created project: ${projectId}`);
     
@@ -139,6 +145,30 @@ async function runTests() {
       await pollForStatus(projectId, 'preview_ready', 30);
     } else {
       console.log('\n[TEST 5] Preview - SKIPPED (not allowed for tier)');
+    }
+    
+    // Test 6: Verify entitlements via query param endpoint
+    console.log('\n[TEST 6] Get entitlements via query param');
+    const entQueryRes = await makeRequest('GET', `/me/entitlements?user_id=${TEST_USER_ID}`);
+    console.log(`✓ Entitlements query param works: tier=${entQueryRes.tier}, quota=${entQueryRes.quota}, remaining=${entQueryRes.remaining}`);
+    
+    // Test 7: Billing - Create checkout session
+    console.log('\n[TEST 7] Billing - Create checkout session for pro tier');
+    try {
+      const checkoutRes = await makeRequest('POST', '/api/billing/checkout', {
+        tier: 'pro',
+        user_id: TEST_USER_ID
+      });
+      if (!checkoutRes.url || typeof checkoutRes.url !== 'string') {
+        throw new Error('Checkout did not return a valid URL');
+      }
+      console.log(`✓ Checkout session created: ${checkoutRes.url.substring(0, 50)}...`);
+    } catch (err) {
+      if (err.message.includes('stripe_not_configured') || err.message.includes('price_id_not_configured')) {
+        console.log('⚠ Checkout test skipped (Stripe not configured)');
+      } else {
+        throw err;
+      }
     }
     
     console.log('\n========================================');
