@@ -61,15 +61,17 @@ const TIER_RULES = {
   pro:    { quota: 25, preview: true  },
 };
 
-async function getEntitlements(supabase, userId) {
-  // 1) Read profile (include subscription fields)
+async function getEntitlements(supabase, userId, opts = {}) {
+  const debug = !!(opts.debug);
+
+  // Read profile including subscription fields
   let { data: prof, error: profErr } = await supabase
     .from('profiles')
     .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
     .eq('user_id', userId)
     .maybeSingle();
 
-  // Auto-create profile if missing
+  // Auto-create if missing
   if (!prof && profErr && profErr.code === 'PGRST116') {
     const { data: newProf } = await supabase
       .from('profiles')
@@ -81,42 +83,41 @@ async function getEntitlements(supabase, userId) {
   }
 
   if (profErr) {
-    // Return something sane on RLS/lookup issues
-    return { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
+    const payload = { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
+    return debug ? { ...payload, _meta: { source:'error', prof:null } } : payload;
   }
 
-  // 2) Determine effective tier
   const norm = v => (v ?? '').toString().trim().toLowerCase();
-  const planTier = norm(prof?.plan_tier || 'free');               // dev/manual fallback
-  const subTier  = norm(prof?.subscription_tier);                 // 'pro' | 'casual' | ''
-  const subStat  = norm(prof?.stripe_subscription_status);        // 'active' | 'trialing' | 'past_due' | ...
+  const planTier = norm(prof?.plan_tier || 'free');
+  const subTier  = norm(prof?.subscription_tier);
+  const subStat  = norm(prof?.stripe_subscription_status);
   const isSub    = !!prof?.is_subscribed;
 
   const subscriptionActive = isSub || subStat === 'active' || subStat === 'trialing';
-  let tier = planTier;
-  if (subscriptionActive && (subTier === 'pro' || subTier === 'casual')) {
-    tier = subTier;
-  }
+  const useSubTier = subscriptionActive && (subTier === 'pro' || subTier === 'casual');
 
-  // 3) Apply rules
-  const rules = TIER_RULES[tier] || TIER_RULES.free;
+  let tier = useSubTier ? subTier : planTier;
+  if (!TIER_RULES[tier]) tier = 'free';
 
-  // 4) Count user's projects to compute remaining
+  // Count user's projects
   const { count } = await supabase
     .from('projects')
     .select('id', { count: 'exact', head: true })
     .eq('user_id', userId);
-
   const used = count || 0;
+  const rules = TIER_RULES[tier];
   const remaining = Math.max(0, rules.quota - used);
 
-  // 5) Return entitlements
-  return {
+  const payload = {
     tier,
     quota: rules.quota,
     previewAllowed: !!rules.preview,
     remaining,
   };
+
+  return debug
+    ? { ...payload, _meta: { source: useSubTier ? 'subscription_tier' : 'plan_tier', planTier, subTier, subStat, isSub, used } }
+    : payload;
 }
 
 // Middleware to check preview/build quota (for preview and build endpoints only)
@@ -272,7 +273,8 @@ app.get('/me/entitlements/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
     if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
-    const ent = await getEntitlements(supabase, userId);
+    const debug = req.query.debug === '1' || req.query._debug === '1';
+    const ent = await getEntitlements(supabase, userId, { debug });
     res.json({ ok:true, ...ent });
   } catch (e) {
     res.status(500).json({ ok:false, error:String(e) });
@@ -282,7 +284,8 @@ app.get('/api/me/entitlements/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
     if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
-    const ent = await getEntitlements(supabase, userId);
+    const debug = req.query.debug === '1' || req.query._debug === '1';
+    const ent = await getEntitlements(supabase, userId, { debug });
     res.json({ ok:true, ...ent });
   } catch (e) {
     res.status(500).json({ ok:false, error:String(e) });
@@ -294,7 +297,8 @@ app.get('/me/entitlements', async (req, res) => {
   try {
     const userId = req.query.user_id;
     if (!userId) return res.status(400).json({ error: 'user_id_required' });
-    const ent = await getEntitlements(supabase, userId);
+    const debug = req.query.debug === '1' || req.query._debug === '1';
+    const ent = await getEntitlements(supabase, userId, { debug });
     res.json({ ok:true, ...ent });
   } catch (e) {
     res.status(500).json({ ok:false, error:String(e) });
