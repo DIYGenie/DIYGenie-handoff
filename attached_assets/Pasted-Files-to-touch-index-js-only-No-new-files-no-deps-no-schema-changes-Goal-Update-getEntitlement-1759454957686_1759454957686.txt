@@ -1,0 +1,91 @@
+Files to touch: index.js only. No new files, no deps, no schema changes.
+
+Goal
+Update getEntitlements(supabase, userId) to compute the effective tier from Stripe-backed fields when present:
+
+Prefer subscription_tier when the user is subscribed (is_subscribed = true or stripe_subscription_status ∈ {active, trialing}).
+
+Otherwise fall back to plan_tier (used by the dev upgrade endpoint).
+
+Keep quotas: free=2, casual=5, pro=25. previewAllowed = tier !== 'free'.
+
+Implementation (surgical edit in index.js)
+
+Replace the body of getEntitlements with the version below. Keep the function name/signature the same and leave callers unchanged.
+
+// Quotas (unchanged)
+const TIER_RULES = {
+  free:   { quota: 2,  preview: false },
+  casual: { quota: 5,  preview: true  },
+  pro:    { quota: 25, preview: true  },
+};
+
+async function getEntitlements(supabase, userId) {
+  // 1) Read profile (include subscription fields)
+  let { data: prof, error: profErr } = await supabase
+    .from('profiles')
+    .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  // Auto-create profile if missing
+  if (!prof && profErr && profErr.code === 'PGRST116') {
+    const { data: newProf } = await supabase
+      .from('profiles')
+      .insert({ user_id: userId, plan_tier: 'free' })
+      .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
+      .maybeSingle();
+    prof = newProf;
+    profErr = null;
+  }
+
+  if (profErr) {
+    // Return something sane on RLS/lookup issues
+    return { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
+  }
+
+  // 2) Determine effective tier
+  const norm = v => (v ?? '').toString().trim().toLowerCase();
+  const planTier = norm(prof?.plan_tier || 'free');               // dev/manual fallback
+  const subTier  = norm(prof?.subscription_tier);                 // 'pro' | 'casual' | ''
+  const subStat  = norm(prof?.stripe_subscription_status);        // 'active' | 'trialing' | 'past_due' | ...
+  const isSub    = !!prof?.is_subscribed;
+
+  const subscriptionActive = isSub || subStat === 'active' || subStat === 'trialing';
+  let tier = planTier;
+  if (subscriptionActive && (subTier === 'pro' || subTier === 'casual')) {
+    tier = subTier;
+  }
+
+  // 3) Apply rules
+  const rules = TIER_RULES[tier] || TIER_RULES.free;
+
+  // 4) Count user's projects to compute remaining
+  const { count } = await supabase
+    .from('projects')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId);
+
+  const used = count || 0;
+  const remaining = Math.max(0, rules.quota - used);
+
+  // 5) Return entitlements
+  return {
+    tier,
+    quota: rules.quota,
+    previewAllowed: !!rules.preview,
+    remaining,
+  };
+}
+
+
+Do not change any other routes. Leave /me/entitlements/:userId and /me/entitlements?user_id=... as they are; they should keep calling getEntitlements(...) and wrapping the return in { ok: true, ... } if that’s your current pattern.
+
+Acceptance
+
+For user e4cb3591-7272-46dd-b1f6-d7cc4e2f3d24 (who has subscription_tier='pro' and stripe_subscription_status='active'),
+GET /me/entitlements?user_id=... returns tier: 'pro', quota: 25, and previewAllowed: true (with remaining reflecting current project count).
+
+If you downgrade/cancel (status not active/trialing), the same endpoint falls back to plan_tier (e.g., free or dev-upgraded value).
+
+No regressions to /api/projects/*.

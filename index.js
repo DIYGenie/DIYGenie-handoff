@@ -62,33 +62,46 @@ const TIER_RULES = {
 };
 
 async function getEntitlements(supabase, userId) {
-  // Get tier from profiles (auto-create if doesn't exist)
+  // 1) Read profile (include subscription fields)
   let { data: prof, error: profErr } = await supabase
     .from('profiles')
-    .select('plan_tier')
+    .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
     .eq('user_id', userId)
-    .single();
+    .maybeSingle();
 
-  // If user doesn't exist, create them with free tier
-  if (profErr && profErr.code === 'PGRST116') {
+  // Auto-create profile if missing
+  if (!prof && profErr && profErr.code === 'PGRST116') {
     const { data: newProf } = await supabase
       .from('profiles')
       .insert({ user_id: userId, plan_tier: 'free' })
-      .select('plan_tier')
-      .single();
+      .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
+      .maybeSingle();
     prof = newProf;
     profErr = null;
   }
 
   if (profErr) {
-    // return something sane if RLS or lookup issues
+    // Return something sane on RLS/lookup issues
     return { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
   }
 
-  const tier = (prof && prof.plan_tier) || 'free';
+  // 2) Determine effective tier
+  const norm = v => (v ?? '').toString().trim().toLowerCase();
+  const planTier = norm(prof?.plan_tier || 'free');               // dev/manual fallback
+  const subTier  = norm(prof?.subscription_tier);                 // 'pro' | 'casual' | ''
+  const subStat  = norm(prof?.stripe_subscription_status);        // 'active' | 'trialing' | 'past_due' | ...
+  const isSub    = !!prof?.is_subscribed;
+
+  const subscriptionActive = isSub || subStat === 'active' || subStat === 'trialing';
+  let tier = planTier;
+  if (subscriptionActive && (subTier === 'pro' || subTier === 'casual')) {
+    tier = subTier;
+  }
+
+  // 3) Apply rules
   const rules = TIER_RULES[tier] || TIER_RULES.free;
 
-  // Count user's projects
+  // 4) Count user's projects to compute remaining
   const { count } = await supabase
     .from('projects')
     .select('id', { count: 'exact', head: true })
@@ -97,11 +110,12 @@ async function getEntitlements(supabase, userId) {
   const used = count || 0;
   const remaining = Math.max(0, rules.quota - used);
 
+  // 5) Return entitlements
   return {
     tier,
     quota: rules.quota,
     previewAllowed: !!rules.preview,
-    remaining
+    remaining,
   };
 }
 
