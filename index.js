@@ -489,6 +489,71 @@ app.post('/api/billing/upgrade', async (req, res) => {
 // --- Helpers ---
 const picsum = seed => `https://picsum.photos/seed/${encodeURIComponent(seed)}/1200/800`;
 
+function norm(s='') { return String(s||'').toLowerCase(); }
+
+function inferBudgetLabel(b) {
+  const t = (b||'').trim();
+  if (t.includes('$$$') || t==='$$$') return '$$$';
+  if (t.includes('$$') || t==='$$') return '$$';
+  if (t.includes('$') || t==='$') return '$';
+  return 'flexible';
+}
+
+function inferDifficulty(skill) {
+  const s = norm(skill);
+  if (s.includes('begin')) return 'beginner';
+  if (s.includes('inter')) return 'medium';
+  if (s.includes('adv') || s.includes('expert') || s.includes('pro')) return 'advanced';
+  return 'medium';
+}
+
+function inferStyle(desc) {
+  const d = norm(desc);
+  if (d.match(/\b(minimal|clean|simple)\b/)) return 'minimal';
+  if (d.match(/\b(modern|contemporary)\b/)) return 'modern';
+  if (d.match(/\b(rustic|farmhouse)\b/)) return 'rustic';
+  if (d.match(/\b(industrial)\b/)) return 'industrial';
+  if (d.match(/\b(scandi|scandinavian)\b/)) return 'scandinavian';
+  return 'modern';
+}
+
+function buildSuggestions({ description, budget, skill }) {
+  const diff = inferDifficulty(skill);
+  const bud  = inferBudgetLabel(budget);
+  const style = inferStyle(description);
+  const items = [];
+
+  // universal
+  items.push(`Match materials: pick finishes that suit ${style} style.`);
+  items.push(`Pre-plan cuts and verify wall studs before mounting.`);
+  items.push(`Label hardware and pre-finish small parts to save time.`);
+
+  // difficulty hints
+  if (diff === 'beginner') {
+    items.push(`Keep joinery simple (pocket screws / brackets); dry-fit before glue.`);
+  } else if (diff === 'advanced') {
+    items.push(`Use scribe lines and a shooting board for tight reveals.`);
+  } else {
+    items.push(`Use a square and stop-blocks for consistent repeat cuts.`);
+  }
+
+  // budget hints
+  if (bud === '$') {
+    items.push(`Save costs: pine/ply core + iron-on edge banding, paint to finish.`);
+  } else if (bud === '$$$') {
+    items.push(`Upgrade: hardwood, hidden fasteners, and a sprayed finish.`);
+  } else {
+    items.push(`Balance cost: veneered ply shelves with hardwood fronts.`);
+  }
+
+  // last one tailored to description
+  if (norm(description).includes('shelf') || norm(description).includes('shelves')) {
+    items.push(`For floating shelves, use rated concealed brackets and hit studs at 16" OC.`);
+  }
+
+  return { items, style, diff, bud };
+}
+
 // --- Projects: LIST ---
 app.get('/api/projects', async (req, res) => {
   try {
@@ -885,42 +950,39 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
 app.post('/api/projects/:id/suggestions', async (req, res) => {
   try {
     const { id } = req.params;
-    const { user_id } = req.body || {};
-    // Basic lookup to validate ownership and get context
+    const userId = resolveUserId(req.body?.user_id || req.query?.user_id);
+
+    // Load the project to pull name/budget/skill (no auth gating)
     const { data: proj, error } = await supabase
       .from('projects')
-      .select('id, name, input_image_url')
+      .select('id, name, budget, skill_level, input_image_url')
       .eq('id', id)
       .maybeSingle();
+
     if (error) throw error;
-    if (!proj) return res.status(404).json({ ok:false, error:'not_found' });
+    if (!proj) return res.status(404).json({ ok: false, error: 'not_found' });
 
-    // Cheap stub — no external calls
-    const title = proj.name || 'Your project';
-    const seed = (proj.input_image_url || title || id).length;
-    const palette = ['oak', 'walnut', 'matte black', 'satin brass', 'natural white'];
-    const accents = ['warm LED', 'linen', 'rattan', 'matte finishes', 'soft gray'];
-    const pick = (arr, n) => arr.slice(0, Math.max(1, Math.min(n, arr.length)));
+    const description = (req.body?.prompt || proj.name || '').trim();
+    const budget = proj.budget || req.body?.budget;
+    const skill  = proj.skill_level || req.body?.skill;
 
-    const payload = {
+    const out = buildSuggestions({ description, budget, skill });
+    const tags = [out.style, out.diff, out.bud].filter(Boolean);
+
+    return res.json({
       ok: true,
-      op: 'suggestions',
-      data: {
-        title: 'Smart Suggestions (beta)',
-        bullets: [
-          `Match materials: ${pick(palette, 2 + (seed % 2)).join(', ')}`,
-          `Accent choices: ${pick(accents, 2 + (seed % 3)).join(', ')}`,
-          'Keep cuts consistent: confirm wall studs at 16" OC before mounting.',
-          'Pre-finish small parts to save time on assembly.',
-          'Lay out all hardware and label bags before step 1.',
-        ],
-        tags: ['style: modern', 'difficulty: medium', 'budget: flexible'],
+      items: out.items,
+      tags,
+      meta: {
+        style: out.style,
+        difficulty: out.diff,
+        budget: out.bud,
+        hasPhoto: !!proj.input_image_url
       }
-    };
-    return res.json(payload);
+    });
   } catch (e) {
-    console.error('[suggestions] error', e);
-    return res.status(500).json({ ok:false, error:String(e.message || e) });
+    console.error('[SUGGESTIONS] error:', e);
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
