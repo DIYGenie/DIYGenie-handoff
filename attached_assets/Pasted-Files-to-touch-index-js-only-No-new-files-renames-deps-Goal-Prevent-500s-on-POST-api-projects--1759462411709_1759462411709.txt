@@ -1,0 +1,91 @@
+Files to touch: index.js only. No new files/renames/deps.
+
+Goal
+
+Prevent 500s on POST /api/projects by auto-creating a profiles row for the user_id if it doesn’t exist.
+
+Return clearer errors (400 for bad input; 500 only on unexpected failures).
+
+Changes (surgical in index.js)
+
+Add helper near other helpers
+
+async function ensureProfile(supabase, userId) {
+  // Try to read existing
+  let { data: prof, error: profErr } = await supabase
+    .from('profiles')
+    .select('user_id, plan_tier, subscription_tier, is_subscribed, stripe_subscription_status')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  // If missing, create a minimal free profile
+  if (!prof && (profErr?.code === 'PGRST116' || !profErr)) {
+    const { data: newProf, error: insErr } = await supabase
+      .from('profiles')
+      .insert({ user_id: userId, plan_tier: 'free' })
+      .select('user_id, plan_tier')
+      .maybeSingle();
+    if (insErr && insErr.code !== '23505') { // ignore dupe
+      throw insErr;
+    }
+    prof = newProf || prof;
+  } else if (profErr) {
+    throw profErr;
+  }
+  return prof;
+}
+
+
+Update POST /api/projects route (add the marked bits; do not change path)
+
+// --- Projects: CREATE ---
+app.post('/api/projects', async (req, res) => {
+  try {
+    let { user_id, name, budget, skill_level } = req.body || {};
+
+    // Handle "auto" user_id (existing logic can remain)
+    if (user_id === 'auto') {
+      // generate UUID v4 (existing code)
+      // ...
+    }
+
+    if (!user_id) {
+      return res.status(400).json({ ok:false, error:'missing_user_id' });
+    }
+    if (!name || String(name).trim().length < 3) {
+      return res.status(400).json({ ok:false, error:'invalid_name' });
+    }
+
+    // ✅ NEW: ensure profile row exists to satisfy FK / RLS
+    await ensureProfile(supabase, user_id);
+
+    // Insert project (defaults ok if your schema provides them)
+    const { data, error } = await supabase
+      .from('projects')
+      .insert({
+        user_id,
+        name: String(name).trim(),
+        budget: budget || null,
+        skill_level: skill_level || null,
+      })
+      .select('*')
+      .maybeSingle();
+    if (error) throw error;
+
+    return res.json({ ok:true, item: { id: data.id, status: data.status || 'draft' } });
+  } catch (e) {
+    console.error('[POST /api/projects] failed:', e);
+    // If it looks like a constraint violation, clarify
+    const msg = String(e.message || e);
+    const isConstraint = /foreign key|violates|constraint/i.test(msg);
+    return res.status(isConstraint ? 400 : 500).json({ ok:false, error: msg });
+  }
+});
+
+Acceptance
+
+POST /api/projects { user_id, name, budget, skill_level } returns 200 { ok:true, item:{ id } } even if the user had no profile yet.
+
+Invalid input (no user_id or too-short name) returns 400 with a clear error.
+
+GET /api/projects?user_id=<same> lists the new project.

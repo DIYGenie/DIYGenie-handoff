@@ -120,6 +120,31 @@ async function getEntitlements(supabase, userId, opts = {}) {
     : payload;
 }
 
+async function ensureProfile(supabase, userId) {
+  // Try to read existing
+  let { data: prof, error: profErr } = await supabase
+    .from('profiles')
+    .select('user_id, plan_tier, subscription_tier, is_subscribed, stripe_subscription_status')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  // If missing, create a minimal free profile
+  if (!prof && (profErr?.code === 'PGRST116' || !profErr)) {
+    const { data: newProf, error: insErr } = await supabase
+      .from('profiles')
+      .insert({ user_id: userId, plan_tier: 'free' })
+      .select('user_id, plan_tier')
+      .maybeSingle();
+    if (insErr && insErr.code !== '23505') { // ignore dupe
+      throw insErr;
+    }
+    prof = newProf || prof;
+  } else if (profErr) {
+    throw profErr;
+  }
+  return prof;
+}
+
 // Middleware to check preview/build quota (for preview and build endpoints only)
 async function requirePreviewOrBuildQuota(req, res, next) {
   try {
@@ -470,7 +495,7 @@ app.get('/api/projects/:id', async (req, res) => {
 // NEVER gated - project creation is always allowed regardless of tier
 app.post('/api/projects', async (req, res) => {
   try {
-    let { user_id, name, budget, skill } = req.body || {};
+    let { user_id, name, budget, skill_level } = req.body || {};
     
     // Handle "auto" user_id - create temporary user with valid UUID
     if (user_id === 'auto') {
@@ -480,44 +505,42 @@ app.post('/api/projects', async (req, res) => {
         const v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
       });
-      // Auto-create profile with free tier
-      await supabase.from('profiles').insert({ user_id, plan_tier: 'free' }).select().single();
     }
-    
-    // Validate name (≥10 chars)
-    const trimmedName = (name || '').trim();
-    if (trimmedName.length < 10) {
-      console.log('[ERROR] Invalid name (must be ≥10 chars):', trimmedName);
-      return res.status(400).json({ ok:false, error:'name_must_be_at_least_10_characters' });
+
+    if (!user_id) {
+      return res.status(400).json({ ok:false, error:'missing_user_id' });
     }
-    
+    if (!name || String(name).trim().length < 3) {
+      return res.status(400).json({ ok:false, error:'invalid_name' });
+    }
+
+    // Ensure profile row exists to satisfy FK / RLS
+    await ensureProfile(supabase, user_id);
+
+    // Insert project (defaults ok if your schema provides them)
     const insert = {
-      user_id: user_id || '00000000-0000-0000-0000-000000000001',
-      name: trimmedName,
-      status: 'draft',
-      input_image_url: null,
-      preview_url: null,
+      user_id,
+      name: String(name).trim(),
     };
     
-    // Add budget and skill if provided (columns may not exist in DB yet)
+    // Only add budget and skill_level if provided (let DB defaults handle missing values)
     if (budget) insert.budget = budget;
-    if (skill) insert.skill = skill;
+    if (skill_level) insert.skill_level = skill_level;
     
     const { data, error } = await supabase
       .from('projects')
       .insert(insert)
-      .select()
-      .single();
-    
-    if (error) {
-      console.log('[ERROR] Database insert failed:', error.message, error);
-      return res.status(500).json({ ok:false, error: error.message });
-    }
-    
-    return res.json({ ok:true, id: data.id });
+      .select('*')
+      .maybeSingle();
+    if (error) throw error;
+
+    return res.json({ ok:true, item: { id: data.id, status: data.status || 'draft' } });
   } catch (e) {
-    console.log('[ERROR] POST /api/projects exception:', e.message);
-    return res.status(500).json({ ok:false, error: String(e.message || e) });
+    console.error('[POST /api/projects] failed:', e);
+    // If it looks like a constraint violation, clarify
+    const msg = String(e.message || e);
+    const isConstraint = /foreign key|violates|constraint/i.test(msg);
+    return res.status(isConstraint ? 400 : 500).json({ ok:false, error: msg });
   }
 });
 
