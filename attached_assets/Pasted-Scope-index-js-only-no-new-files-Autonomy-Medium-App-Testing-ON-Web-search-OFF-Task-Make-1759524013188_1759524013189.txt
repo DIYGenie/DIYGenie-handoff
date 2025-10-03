@@ -1,0 +1,113 @@
+Scope: index.js only (no new files).
+Autonomy: Medium. App Testing: ON. Web search: OFF.
+
+Task: Make POST /api/projects dev-safe:
+
+Map user_id:"auto" (or falsy) to process.env.TEST_USER_ID (must be set to your known auth user).
+
+Stop generating random UUIDs for dev users.
+
+Guard the profiles FK cleanly and return 422 with readable JSON if the user truly doesn’t exist.
+
+Keep accepting skill or skill_level (normalize to skill_level).
+
+Never return 500 for input errors.
+
+Files to touch: index.js
+
+Edits to implement:
+
+Add a small helper near the top (after envs are read):
+
+function resolveUserId(raw) {
+  const id = (raw || '').trim();
+  if (!id || id === 'auto') return process.env.TEST_USER_ID || null;
+  return id;
+}
+
+
+In POST /api/projects:
+
+Remove the “generate UUID v4 when user_id==='auto'” logic.
+
+Normalize body and resolve user id:
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    let { user_id, name, budget, skill, skill_level } = req.body || {};
+    const lvl = skill_level || skill || '';
+    const uid = resolveUserId(user_id);
+
+    if (!uid) {
+      return res.status(422).json({ ok:false, error:'dev_user_not_configured', details:'TEST_USER_ID env var not set' });
+    }
+    if (!name || String(name).trim().length < 10) {
+      return res.status(422).json({ ok:false, error:'invalid_name', details:'name must be ≥ 10 characters' });
+    }
+    if (!budget) {
+      return res.status(422).json({ ok:false, error:'invalid_budget', details:'budget is required' });
+    }
+    if (!lvl) {
+      return res.status(422).json({ ok:false, error:'invalid_skill_level', details:'skill_level is required' });
+    }
+
+    // Ensure profile exists (FK to auth.users). Try select, if missing try insert (works for TEST_USER_ID).
+    let { data: prof, error: profErr } = await supabase
+      .from('profiles')
+      .select('user_id')
+      .eq('user_id', uid)
+      .maybeSingle();
+
+    if (!prof) {
+      const { error: insErr } = await supabase
+        .from('profiles')
+        .insert({ user_id: uid, plan_tier: 'free' })
+        .single();
+      if (insErr) {
+        return res.status(422).json({
+          ok:false,
+          error:'profile_insert_failed',
+          details: insErr.message || String(insErr)
+        });
+      }
+    }
+
+    // Insert project
+    const insert = {
+      user_id: uid,
+      name: String(name).trim(),
+      budget,
+      skill_level: lvl,
+      status: 'draft',
+      created_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase.from('projects').insert(insert).select('id,status').single();
+    if (error) {
+      return res.status(422).json({ ok:false, error:'insert_failed', details: error.message || String(error) });
+    }
+    res.json({ ok:true, item: data });
+  } catch (e) {
+    console.error('[POST /api/projects] unexpected', e);
+    res.status(500).json({ ok:false, error:'unexpected', details:String(e?.message || e) });
+  }
+});
+
+
+Do not modify any other endpoints or feature flags.
+
+Acceptance Criteria:
+
+POST /api/projects with:
+
+{ "user_id":"auto", "name":"Build 3 floating shelves", "budget":"$$", "skill":"intermediate" }
+
+
+→ 200 { ok:true, item:{ id, status:"draft" } }
+
+Using an unknown UUID not in auth.users:
+→ 422 { ok:false, error:"profile_insert_failed" | "unknown_user", details:"..." }
+
+No 500s for validation/foreign-key issues.
+
+Logs show clean flow.

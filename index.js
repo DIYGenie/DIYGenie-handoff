@@ -54,6 +54,13 @@ function getBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
+// Helper to resolve user_id safely for dev/testing
+function resolveUserId(raw) {
+  const id = (raw || '').trim();
+  if (!id || id === 'auto') return process.env.TEST_USER_ID || null;
+  return id;
+}
+
 // --- ENTITLEMENTS CONFIG ---
 const TIER_RULES = {
   free:   { quota: 2,  preview: false },
@@ -494,74 +501,61 @@ app.get('/api/projects/:id', async (req, res) => {
 // --- Projects: CREATE ---
 // NEVER gated - project creation is always allowed regardless of tier
 app.post('/api/projects', async (req, res) => {
-  const bodyKeys = Object.keys(req.body || {}).join(',');
-  console.log(`[POST /api/projects] body keys: ${bodyKeys}`);
-  
   try {
-    let { user_id, name, budget, skill_level, skill } = req.body || {};
-    
-    // Map skill → skill_level if skill_level not provided
-    if (!skill_level && skill) {
-      skill_level = skill;
-    }
-    
-    // Validate UUID or generate if 'auto'/empty/invalid
-    const isValidUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
-    if (user_id === 'auto' || !user_id || !isValidUUID(user_id)) {
-      // Generate valid UUID v4
-      user_id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = Math.random() * 16 | 0;
-        const v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-      });
-    }
+    let { user_id, name, budget, skill, skill_level } = req.body || {};
+    const lvl = skill_level || skill || '';
+    const uid = resolveUserId(user_id);
 
-    // Validate required fields
-    const trimmedName = String(name || '').trim();
-    if (trimmedName.length < 10) {
-      console.log(`[POST /api/projects] validation failed: name too short`);
-      return res.status(422).json({ ok: false, error: 'name_must_be_at_least_10_characters' });
+    if (!uid) {
+      return res.status(422).json({ ok: false, error: 'dev_user_not_configured', details: 'TEST_USER_ID env var not set' });
+    }
+    if (!name || String(name).trim().length < 10) {
+      return res.status(422).json({ ok: false, error: 'invalid_name', details: 'name must be ≥ 10 characters' });
+    }
+    if (!budget) {
+      return res.status(422).json({ ok: false, error: 'invalid_budget', details: 'budget is required' });
+    }
+    if (!lvl) {
+      return res.status(422).json({ ok: false, error: 'invalid_skill_level', details: 'skill_level is required' });
     }
 
-    // Ensure profile row exists to satisfy FK / RLS
-    await ensureProfile(supabase, user_id);
+    // Ensure profile exists (FK to auth.users). Try select, if missing try insert (works for TEST_USER_ID).
+    let { data: prof, error: profErr } = await supabase
+      .from('profiles')
+      .select('user_id')
+      .eq('user_id', uid)
+      .maybeSingle();
 
-    // Insert project with safe defaults
+    if (!prof) {
+      const { error: insErr } = await supabase
+        .from('profiles')
+        .insert({ user_id: uid, plan_tier: 'free' })
+        .single();
+      if (insErr) {
+        return res.status(422).json({
+          ok: false,
+          error: 'profile_insert_failed',
+          details: insErr.message || String(insErr)
+        });
+      }
+    }
+
+    // Insert project (skill_level omitted due to Supabase schema cache constraint)
     const insert = {
-      user_id,
-      name: trimmedName,
+      user_id: uid,
+      name: String(name).trim(),
+      budget,
       status: 'draft'
     };
-    
-    // Add optional fields if provided (let DB defaults handle missing values)
-    if (budget) insert.budget = budget;
-    // Note: skill/skill_level not inserted due to schema cache/constraint issues
-    // DB will use defaults if columns exist
-    
-    const { data, error } = await supabase
-      .from('projects')
-      .insert(insert)
-      .select('*')
-      .maybeSingle();
-    
-    if (error) {
-      console.log(`[POST /api/projects] insert failed: ${error.message}`);
-      return res.status(422).json({ 
-        ok: false, 
-        error: 'insert_failed', 
-        details: error.message 
-      });
-    }
 
-    console.log(`[POST /api/projects] success: id=${data.id}`);
-    return res.json({ ok: true, item: { id: data.id, status: 'draft' } });
+    const { data, error } = await supabase.from('projects').insert(insert).select('id,status').single();
+    if (error) {
+      return res.status(422).json({ ok: false, error: 'insert_failed', details: error.message || String(error) });
+    }
+    res.json({ ok: true, item: data });
   } catch (e) {
-    console.error('[POST /api/projects] unexpected error:', e);
-    return res.status(422).json({ 
-      ok: false, 
-      error: 'insert_failed', 
-      details: String(e.message || e) 
-    });
+    console.error('[POST /api/projects] unexpected', e);
+    res.status(500).json({ ok: false, error: 'unexpected', details: String(e?.message || e) });
   }
 });
 
