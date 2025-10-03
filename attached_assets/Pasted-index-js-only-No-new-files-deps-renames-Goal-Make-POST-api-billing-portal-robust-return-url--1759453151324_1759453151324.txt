@@ -1,0 +1,79 @@
+index.js only. No new files/deps/renames.
+
+Goal
+Make POST /api/billing/portal robust: return { url } on success, otherwise informative 501 codes (no_customer, portal_not_configured, invalid_customer) instead of 500s. Keep logs minimal.
+
+Implement
+Find your existing app.post('/api/billing/portal', …) and replace its body with:
+
+app.post('/api/billing/portal', async (req, res) => {
+  try {
+    const { user_id, customer_id } = req.body || {};
+    let customerId = (customer_id || '').trim();
+
+    // Look up by user_id if customer_id not provided
+    if (!customerId && user_id) {
+      const { data: prof, error } = await supabase
+        .from('profiles')
+        .select('stripe_customer_id')
+        .eq('user_id', user_id)
+        .maybeSingle();
+      if (error) throw error;
+      customerId = (prof && prof.stripe_customer_id) ? String(prof.stripe_customer_id).trim() : '';
+    }
+
+    if (!customerId) {
+      console.info('[billing] portal: no customer id', { user_id });
+      return res.status(501).json({ ok: false, error: 'no_customer' });
+    }
+
+    const base = getBaseUrl(req);
+    const return_url = process.env.PORTAL_RETURN_URL || `${base}/billing/portal-return`;
+
+    try {
+      const session = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url,
+      });
+      console.info('[billing] portal session created', { user_id, customerId });
+      return res.json({ ok: true, url: session.url });
+    } catch (se) {
+      // Stripe error handling → map to friendly 501 codes
+      const msg = String(se.message || se);
+      const code = (se && se.code) ? String(se.code) : '';
+      // Common cases: portal not enabled, invalid customer, test/live mismatch, etc.
+      if (/portal/i.test(msg) && /enable|configur/i.test(msg)) {
+        console.warn('[billing] portal not configured', { code, msg });
+        return res.status(501).json({ ok: false, error: 'portal_not_configured' });
+      }
+      if (/no such customer/i.test(msg) || code === 'resource_missing') {
+        console.warn('[billing] invalid customer id', { customerId, msg });
+        return res.status(501).json({ ok: false, error: 'invalid_customer' });
+      }
+      console.error('[billing] portal Stripe error', { code, msg });
+      return res.status(501).json({ ok: false, error: 'portal_unavailable' });
+    }
+  } catch (e) {
+    console.error('[billing] portal handler error', e);
+    return res.status(500).json({ ok: false, error: 'server_error' });
+  }
+});
+
+
+Acceptance
+
+POST /api/billing/portal { user_id: 'e4cb3591-7272-46dd-b1f6-d7cc4e2f3d24' } →
+
+Success: { ok:true, url:'https://billing.stripe.com/...' }
+
+Or one of:
+
+501 {"error":"no_customer"} (profile missing stripe_customer_id)
+
+501 {"error":"portal_not_configured"} (Stripe portal not enabled/configured)
+
+501 {"error":"invalid_customer"} (bad/mismatched customer id)
+
+501 {"error":"portal_unavailable"} (other Stripe-side error)
+
+No generic 500 unless an actual server exception occurs.

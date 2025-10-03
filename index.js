@@ -330,34 +330,53 @@ app.post('/api/billing/checkout', async (req, res) => {
 app.post('/api/billing/portal', async (req, res) => {
   try {
     const { user_id, customer_id } = req.body || {};
-    const customerId = customer_id || (await (async () => {
-      if (!user_id) return null;
+    let customerId = (customer_id || '').trim();
+
+    // Look up by user_id if customer_id not provided
+    if (!customerId && user_id) {
       const { data: prof, error } = await supabase
         .from('profiles')
         .select('stripe_customer_id')
         .eq('user_id', user_id)
         .maybeSingle();
       if (error) throw error;
-      return prof && prof.stripe_customer_id;
-    })());
+      customerId = (prof && prof.stripe_customer_id) ? String(prof.stripe_customer_id).trim() : '';
+    }
 
     if (!customerId) {
+      console.info('[billing] portal: no customer id', { user_id });
       return res.status(501).json({ ok: false, error: 'no_customer' });
     }
 
     const base = getBaseUrl(req);
     const return_url = process.env.PORTAL_RETURN_URL || `${base}/billing/portal-return`;
 
-    const session = await stripe.billingPortal.sessions.create({
-      customer: customerId,
-      return_url,
-    });
-
-    console.info('[billing] portal session', { user_id, customerId, url: session.url });
-    return res.json({ ok: true, url: session.url });
+    try {
+      const session = await stripe.billingPortal.sessions.create({
+        customer: customerId,
+        return_url,
+      });
+      console.info('[billing] portal session created', { user_id, customerId });
+      return res.json({ ok: true, url: session.url });
+    } catch (se) {
+      // Stripe error handling → map to friendly 501 codes
+      const msg = String(se.message || se);
+      const code = (se && se.code) ? String(se.code) : '';
+      // Common cases: portal not enabled, invalid customer, test/live mismatch, etc.
+      if (/portal/i.test(msg) && /enable|configur/i.test(msg)) {
+        console.warn('[billing] portal not configured', { code, msg });
+        return res.status(501).json({ ok: false, error: 'portal_not_configured' });
+      }
+      if (/no such customer/i.test(msg) || code === 'resource_missing') {
+        console.warn('[billing] invalid customer id', { customerId, msg });
+        return res.status(501).json({ ok: false, error: 'invalid_customer' });
+      }
+      console.error('[billing] portal Stripe error', { code, msg });
+      return res.status(501).json({ ok: false, error: 'portal_unavailable' });
+    }
   } catch (e) {
-    console.error('[billing] portal error', e);
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
+    console.error('[billing] portal handler error', e);
+    return res.status(500).json({ ok: false, error: 'server_error' });
   }
 });
 
