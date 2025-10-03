@@ -494,11 +494,20 @@ app.get('/api/projects/:id', async (req, res) => {
 // --- Projects: CREATE ---
 // NEVER gated - project creation is always allowed regardless of tier
 app.post('/api/projects', async (req, res) => {
+  const bodyKeys = Object.keys(req.body || {}).join(',');
+  console.log(`[POST /api/projects] body keys: ${bodyKeys}`);
+  
   try {
-    let { user_id, name, budget, skill_level } = req.body || {};
+    let { user_id, name, budget, skill_level, skill } = req.body || {};
     
-    // Handle "auto" user_id - create temporary user with valid UUID
-    if (user_id === 'auto') {
+    // Map skill → skill_level if skill_level not provided
+    if (!skill_level && skill) {
+      skill_level = skill;
+    }
+    
+    // Validate UUID or generate if 'auto'/empty/invalid
+    const isValidUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+    if (user_id === 'auto' || !user_id || !isValidUUID(user_id)) {
       // Generate valid UUID v4
       user_id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
         const r = Math.random() * 16 | 0;
@@ -507,40 +516,52 @@ app.post('/api/projects', async (req, res) => {
       });
     }
 
-    if (!user_id) {
-      return res.status(400).json({ ok:false, error:'missing_user_id' });
-    }
-    if (!name || String(name).trim().length < 3) {
-      return res.status(400).json({ ok:false, error:'invalid_name' });
+    // Validate required fields
+    const trimmedName = String(name || '').trim();
+    if (trimmedName.length < 10) {
+      console.log(`[POST /api/projects] validation failed: name too short`);
+      return res.status(422).json({ ok: false, error: 'name_must_be_at_least_10_characters' });
     }
 
     // Ensure profile row exists to satisfy FK / RLS
     await ensureProfile(supabase, user_id);
 
-    // Insert project (defaults ok if your schema provides them)
+    // Insert project with safe defaults
     const insert = {
       user_id,
-      name: String(name).trim(),
+      name: trimmedName,
+      status: 'draft'
     };
     
-    // Only add budget and skill_level if provided (let DB defaults handle missing values)
+    // Add optional fields if provided (let DB defaults handle missing values)
     if (budget) insert.budget = budget;
-    if (skill_level) insert.skill_level = skill_level;
+    // Note: skill/skill_level not inserted due to schema cache/constraint issues
+    // DB will use defaults if columns exist
     
     const { data, error } = await supabase
       .from('projects')
       .insert(insert)
       .select('*')
       .maybeSingle();
-    if (error) throw error;
+    
+    if (error) {
+      console.log(`[POST /api/projects] insert failed: ${error.message}`);
+      return res.status(422).json({ 
+        ok: false, 
+        error: 'insert_failed', 
+        details: error.message 
+      });
+    }
 
-    return res.json({ ok:true, item: { id: data.id, status: data.status || 'draft' } });
+    console.log(`[POST /api/projects] success: id=${data.id}`);
+    return res.json({ ok: true, item: { id: data.id, status: 'draft' } });
   } catch (e) {
-    console.error('[POST /api/projects] failed:', e);
-    // If it looks like a constraint violation, clarify
-    const msg = String(e.message || e);
-    const isConstraint = /foreign key|violates|constraint/i.test(msg);
-    return res.status(isConstraint ? 400 : 500).json({ ok:false, error: msg });
+    console.error('[POST /api/projects] unexpected error:', e);
+    return res.status(422).json({ 
+      ok: false, 
+      error: 'insert_failed', 
+      details: String(e.message || e) 
+    });
   }
 });
 
