@@ -34,6 +34,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 console.log('[INIT] Supabase client created with service role key');
 
 const UPLOADS_BUCKET = process.env.EXPO_PUBLIC_UPLOADS_BUCKET || "uploads";
+const TEST_USER_ID = process.env.TEST_USER_ID;
+const TEST_USER_EMAIL = process.env.TEST_USER_EMAIL || 'dev+test@diygenieapp.com';
 
 // Stripe initialization (optional, only if key is present)
 let stripe = null;
@@ -57,8 +59,30 @@ function getBaseUrl(req) {
 // Helper to resolve user_id safely for dev/testing
 function resolveUserId(raw) {
   const id = (raw || '').trim();
-  if (!id || id === 'auto') return process.env.TEST_USER_ID || null;
+  if (!id || id === 'auto') return TEST_USER_ID || null;
   return id;
+}
+
+// Ensure there is an auth.users row; required before touching `profiles`
+async function ensureAuthUserExists(supabase, userId, email) {
+  if (!userId) return { ok: false, error: 'missing_test_user_id' };
+  try {
+    const { data: getRes, error: getErr } = await supabase.auth.admin.getUserById(userId);
+    if (getErr && !String(getErr.message || '').includes('not found')) {
+      return { ok: false, error: String(getErr.message || getErr) };
+    }
+    if (getRes?.user) return { ok: true };
+
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+      user_id: userId,
+      email,
+      email_confirm: true
+    });
+    if (createErr) return { ok: false, error: String(createErr.message || createErr) };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
 }
 
 // --- ENTITLEMENTS CONFIG ---
@@ -503,59 +527,59 @@ app.get('/api/projects/:id', async (req, res) => {
 app.post('/api/projects', async (req, res) => {
   try {
     let { user_id, name, budget, skill, skill_level } = req.body || {};
-    const lvl = skill_level || skill || '';
-    const uid = resolveUserId(user_id);
+    const resolvedUserId = resolveUserId(user_id);
 
-    if (!uid) {
-      return res.status(422).json({ ok: false, error: 'dev_user_not_configured', details: 'TEST_USER_ID env var not set' });
-    }
-    if (!name || String(name).trim().length < 10) {
-      return res.status(422).json({ ok: false, error: 'invalid_name', details: 'name must be ≥ 10 characters' });
-    }
-    if (!budget) {
-      return res.status(422).json({ ok: false, error: 'invalid_budget', details: 'budget is required' });
-    }
-    if (!lvl) {
-      return res.status(422).json({ ok: false, error: 'invalid_skill_level', details: 'skill_level is required' });
+    // Basic validation
+    if (!resolvedUserId) return res.status(422).json({ ok: false, error: 'invalid_user', details: 'TEST_USER_ID not set' });
+    if (!name || String(name).trim().length < 10) return res.status(422).json({ ok: false, error: 'invalid_name', details: 'name must be ≥ 10 chars' });
+    if (!budget) return res.status(422).json({ ok: false, error: 'invalid_budget' });
+    const skillLevel = skill_level || skill;
+    if (!skillLevel) return res.status(422).json({ ok: false, error: 'invalid_skill_level' });
+
+    // Ensure dev auth user exists (only needed for TEST_USER_ID path)
+    if (resolvedUserId === TEST_USER_ID) {
+      const okUser = await ensureAuthUserExists(supabase, resolvedUserId, TEST_USER_EMAIL);
+      if (!okUser.ok) return res.status(422).json({ ok: false, error: 'auth_user_missing', details: okUser.error });
     }
 
-    // Ensure profile exists (FK to auth.users). Try select, if missing try insert (works for TEST_USER_ID).
+    // Ensure profile exists (FK will now succeed)
     let { data: prof, error: profErr } = await supabase
       .from('profiles')
-      .select('user_id')
-      .eq('user_id', uid)
+      .select('plan_tier')
+      .eq('user_id', resolvedUserId)
       .maybeSingle();
 
-    if (!prof) {
-      const { error: insErr } = await supabase
+    if (!prof && profErr && profErr.code === 'PGRST116') {
+      const { data: newProf, error: insertErr } = await supabase
         .from('profiles')
-        .insert({ user_id: uid, plan_tier: 'free' })
-        .single();
-      if (insErr) {
-        return res.status(422).json({
-          ok: false,
-          error: 'profile_insert_failed',
-          details: insErr.message || String(insErr)
-        });
-      }
+        .insert({ user_id: resolvedUserId, plan_tier: 'free' })
+        .select('plan_tier')
+        .maybeSingle();
+      if (insertErr) return res.status(422).json({ ok: false, error: 'profile_insert_failed', details: String(insertErr.message || insertErr) });
+      prof = newProf;
+    } else if (profErr && !prof) {
+      return res.status(422).json({ ok: false, error: 'profile_lookup_failed', details: String(profErr.message || profErr) });
     }
 
-    // Insert project (skill_level omitted due to Supabase schema cache constraint)
-    const insert = {
-      user_id: uid,
-      name: String(name).trim(),
-      budget,
-      status: 'draft'
-    };
+    // Create project
+    const { data: inserted, error: projectErr } = await supabase
+      .from('projects')
+      .insert({
+        user_id: resolvedUserId,
+        name: String(name).trim(),
+        budget,
+        status: 'draft'
+      })
+      .select('id, status')
+      .maybeSingle();
 
-    const { data, error } = await supabase.from('projects').insert(insert).select('id,status').single();
-    if (error) {
-      return res.status(422).json({ ok: false, error: 'insert_failed', details: error.message || String(error) });
+    if (projectErr || !inserted?.id) {
+      return res.status(422).json({ ok: false, error: 'insert_failed', details: String(projectErr?.message || projectErr || 'no_id') });
     }
-    res.json({ ok: true, item: data });
+
+    return res.json({ ok: true, item: inserted });
   } catch (e) {
-    console.error('[POST /api/projects] unexpected', e);
-    res.status(500).json({ ok: false, error: 'unexpected', details: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: 'server_error', details: String(e.message || e) });
   }
 });
 

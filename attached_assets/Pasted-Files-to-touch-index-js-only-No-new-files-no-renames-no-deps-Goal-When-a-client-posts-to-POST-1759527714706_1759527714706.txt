@@ -1,0 +1,139 @@
+Files to touch: index.js only. No new files, no renames, no deps.
+
+Goal
+
+When a client posts to POST /api/projects with user_id:"auto" (or empty), map to process.env.TEST_USER_ID.
+
+If that user doesn’t exist in auth.users, create it via supabase.auth.admin.createUser(...) (service role key).
+
+Keep existing behavior (insert/select profiles) but never generate random UUIDs.
+
+Return clear 422 validation errors (not 500) for bad input.
+
+Exact changes
+
+In index.js, near where Supabase client is created, add:
+
+const TEST_USER_ID = process.env.TEST_USER_ID;
+const TEST_USER_EMAIL = process.env.TEST_USER_EMAIL || 'dev+test@diygenieapp.com';
+
+
+Add helpers:
+
+function resolveUserId(raw) {
+  const id = (raw || '').trim();
+  if (!id || id === 'auto') return TEST_USER_ID || null;
+  return id;
+}
+
+// Ensure there is an auth.users row; required before touching `profiles`
+async function ensureAuthUserExists(supabase, userId, email) {
+  if (!userId) return { ok:false, error:'missing_test_user_id' };
+  try {
+    const { data: getRes, error: getErr } = await supabase.auth.admin.getUserById(userId);
+    if (getErr && !String(getErr.message || '').includes('not found')) {
+      return { ok:false, error:String(getErr.message || getErr) };
+    }
+    if (getRes?.user) return { ok:true };
+
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+      user_id: userId,
+      email,
+      email_confirm: true
+    });
+    if (createErr) return { ok:false, error:String(createErr.message || createErr) };
+    return { ok:true };
+  } catch (e) {
+    return { ok:false, error:String(e.message || e) };
+  }
+}
+
+
+In POST /api/projects:
+
+Replace any random UUID generation.
+
+Map payload to { user_id, name, budget, skill_level }.
+
+If user_id resolves to TEST_USER_ID, call ensureAuthUserExists(...) before inserting/selecting profiles.
+
+On input errors, respond 422 with { ok:false, error:'invalid_<field>', details:'...' }.
+
+Pseudocode block to insert/replace inside the handler:
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    let { user_id, name, budget, skill, skill_level } = req.body || {};
+    const resolvedUserId = resolveUserId(user_id);
+
+    // Basic validation
+    if (!resolvedUserId) return res.status(422).json({ ok:false, error:'invalid_user', details:'TEST_USER_ID not set' });
+    if (!name || String(name).trim().length < 10) return res.status(422).json({ ok:false, error:'invalid_name', details:'name must be ≥ 10 chars' });
+    if (!budget) return res.status(422).json({ ok:false, error:'invalid_budget' });
+    const skillLevel = skill_level || skill;
+    if (!skillLevel) return res.status(422).json({ ok:false, error:'invalid_skill_level' });
+
+    // Ensure dev auth user exists (only needed for TEST_USER_ID path)
+    if (resolvedUserId === TEST_USER_ID) {
+      const okUser = await ensureAuthUserExists(supabase, resolvedUserId, TEST_USER_EMAIL);
+      if (!okUser.ok) return res.status(422).json({ ok:false, error:'auth_user_missing', details: okUser.error });
+    }
+
+    // Ensure profile exists (FK will now succeed)
+    let { data: prof, error: profErr } = await supabase
+      .from('profiles')
+      .select('plan_tier')
+      .eq('user_id', resolvedUserId)
+      .maybeSingle();
+
+    if (!prof && profErr && profErr.code === 'PGRST116') {
+      const { data: newProf, error: insertErr } = await supabase
+        .from('profiles')
+        .insert({ user_id: resolvedUserId, plan_tier: 'free' })
+        .select('plan_tier')
+        .maybeSingle();
+      if (insertErr) return res.status(422).json({ ok:false, error:'profile_insert_failed', details:String(insertErr.message || insertErr) });
+      prof = newProf;
+    } else if (profErr && !prof) {
+      return res.status(422).json({ ok:false, error:'profile_lookup_failed', details:String(profErr.message || profErr) });
+    }
+
+    // Create project
+    const { data: inserted, error: projectErr } = await supabase
+      .from('projects')
+      .insert({
+        user_id: resolvedUserId,
+        name: String(name).trim(),
+        budget,
+        // let DB default handle this if needed; or persist if schema allows:
+        // skill_level: skillLevel,
+        status: 'draft'
+      })
+      .select('id, status')
+      .maybeSingle();
+
+    if (projectErr || !inserted?.id) {
+      return res.status(422).json({ ok:false, error:'insert_failed', details:String(projectErr?.message || projectErr || 'no_id') });
+    }
+
+    return res.json({ ok:true, item: inserted });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:'server_error', details:String(e.message || e) });
+  }
+});
+
+
+Acceptance Criteria
+
+POST /api/projects with body:
+
+{ "user_id": "auto", "name": "Build 3 floating shelves", "budget": "$$", "skill_level": "intermediate" }
+
+
+returns 200 { ok:true, item:{ id, status:"draft" } }.
+
+If the TEST user is missing from auth.users, the endpoint auto-creates it and succeeds.
+
+No random UUIDs are generated anymore.
+
+Bad inputs return 422 with helpful messages.
