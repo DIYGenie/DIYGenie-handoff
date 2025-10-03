@@ -624,7 +624,7 @@ app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, re
     // Validate project exists and has image
     const { data: project, error: pErr } = await supabase
       .from('projects')
-      .select('id, input_image_url')
+      .select('id, input_image_url, preview_url, status')
       .eq('id', id)
       .single();
 
@@ -633,6 +633,11 @@ app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, re
     }
     if (!project.input_image_url) {
       return res.status(422).json({ ok:false, error: 'missing_input_image_url' });
+    }
+
+    // Enforce max 1 preview per project
+    if (project.preview_url || project.status === 'preview_ready') {
+      return res.status(409).json({ ok:false, error: 'preview_already_used' });
     }
 
     // Mark preview requested
@@ -810,6 +815,50 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
   } catch (err) {
     console.error('[build-without-preview] error:', err);
     return res.status(500).json({ ok:false, error:'build_without_preview_failed' });
+  }
+});
+
+// --- Smart Suggestions endpoint (beta) -------------------------------------
+// POST /api/projects/:id/suggestions
+app.post('/api/projects/:id/suggestions', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+    // Basic lookup to validate ownership and get context
+    const { data: proj, error } = await supabase
+      .from('projects')
+      .select('id, name, input_image_url')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!proj) return res.status(404).json({ ok:false, error:'not_found' });
+
+    // Cheap stub — no external calls
+    const title = proj.name || 'Your project';
+    const seed = (proj.input_image_url || title || id).length;
+    const palette = ['oak', 'walnut', 'matte black', 'satin brass', 'natural white'];
+    const accents = ['warm LED', 'linen', 'rattan', 'matte finishes', 'soft gray'];
+    const pick = (arr, n) => arr.slice(0, Math.max(1, Math.min(n, arr.length)));
+
+    const payload = {
+      ok: true,
+      op: 'suggestions',
+      data: {
+        title: 'Smart Suggestions (beta)',
+        bullets: [
+          `Match materials: ${pick(palette, 2 + (seed % 2)).join(', ')}`,
+          `Accent choices: ${pick(accents, 2 + (seed % 3)).join(', ')}`,
+          'Keep cuts consistent: confirm wall studs at 16" OC before mounting.',
+          'Pre-finish small parts to save time on assembly.',
+          'Lay out all hardware and label bags before step 1.',
+        ],
+        tags: ['style: modern', 'difficulty: medium', 'budget: flexible'],
+      }
+    };
+    return res.json(payload);
+  } catch (e) {
+    console.error('[suggestions] error', e);
+    return res.status(500).json({ ok:false, error:String(e.message || e) });
   }
 });
 

@@ -1,0 +1,77 @@
+Files to touch: index.js only. No new files/deps/renames.
+
+Goal
+
+Enforce max 1 visual preview per project (paid tiers allowed, Free blocked).
+
+Add Smart Suggestions (beta) endpoint that returns inexpensive, stubbed guidance from an image/project.
+
+Implement (edit index.js)
+
+Guard the preview route (top of POST /api/projects/:id/preview):
+
+Load project by id. If not found → 404 { ok:false, error:'not_found' }.
+
+If project.preview_url already set (or status === 'preview_ready') → return 409 { ok:false, error:'preview_already_used' }.
+
+Keep existing entitlement checks (Free remains blocked if previewAllowed:false). Proceed as before on first-time request.
+
+Add Suggestions endpoint (stub)
+Append this route (near other project routes):
+
+app.post('/api/projects/:id/suggestions', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+    // Basic lookup to validate ownership and get context
+    const { data: proj, error } = await supabase
+      .from('projects')
+      .select('id, name, input_image_url')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!proj) return res.status(404).json({ ok:false, error:'not_found' });
+
+    // Cheap stub — no external calls
+    const title = proj.name || 'Your project';
+    const seed = (proj.input_image_url || title || id).length;
+    const palette = ['oak', 'walnut', 'matte black', 'satin brass', 'natural white'];
+    const accents = ['warm LED', 'linen', 'rattan', 'matte finishes', 'soft gray'];
+    const pick = (arr, n) => arr.slice(0, Math.max(1, Math.min(n, arr.length)));
+
+    const payload = {
+      ok: true,
+      op: 'suggestions',
+      data: {
+        title: 'Smart Suggestions (beta)',
+        bullets: [
+          `Match materials: ${pick(palette, 2 + (seed % 2)).join(', ')}`,
+          `Accent choices: ${pick(accents, 2 + (seed % 3)).join(', ')}`,
+          'Keep cuts consistent: confirm wall studs at 16" OC before mounting.',
+          'Pre-finish small parts to save time on assembly.',
+          'Lay out all hardware and label bags before step 1.',
+        ],
+        tags: ['style: modern', 'difficulty: medium', 'budget: flexible'],
+      }
+    };
+    return res.json(payload);
+  } catch (e) {
+    console.error('[suggestions] error', e);
+    return res.status(500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+
+Acceptance
+
+First call to POST /api/projects/:id/preview (paid tier) → 200 OK (existing behavior).
+
+Second call for same id → 409 { error:"preview_already_used" }.
+
+Free tier still blocked by existing entitlement check (e.g., 403/401 per current logic).
+
+POST /api/projects/:id/suggestions { user_id } → 200 { ok:true, op:'suggestions', data:{ title, bullets[], tags[] } }.
+
+No schema changes; no new files.
+
+Q
