@@ -223,6 +223,9 @@ async function requirePreviewOrBuildQuota(req, res, next) {
 // --- Feature Flags -----------------------------------------------------------
 const PREVIEW_PROVIDER = process.env.PREVIEW_PROVIDER || 'stub'; // 'decor8' or 'stub'
 const PLAN_PROVIDER = process.env.PLAN_PROVIDER || 'stub';       // 'openai' or 'stub'
+const SUGGESTIONS_PROVIDER = process.env.SUGGESTIONS_PROVIDER || 'stub'; // 'stub' | 'openai'
+const SUGGESTIONS_OPENAI_MODEL = process.env.SUGGESTIONS_OPENAI_MODEL || 'gpt-4o-mini';
+const SUGGESTIONS_OPENAI_BASE = process.env.SUGGESTIONS_OPENAI_BASE || 'https://api.openai.com/v1';
 
 // --- Decor8 helpers ----------------------------------------------------------
 const DECOR8_BASE_URL = process.env.DECOR8_BASE_URL || 'https://api.decor8.ai';
@@ -316,7 +319,13 @@ Return a JSON object with this structure:
 }
 
 // --- Health ---
-app.get('/health', (req, res) => res.json({ ok: true, status: 'healthy' }));
+app.get('/health', (req, res) => res.json({ 
+  ok: true, 
+  status: 'healthy', 
+  suggestions: SUGGESTIONS_PROVIDER,
+  preview: PREVIEW_PROVIDER,
+  plan: PLAN_PROVIDER
+}));
 app.get('/', (req, res) => res.json({
   message: 'Server is running',
   status: 'ready',
@@ -552,6 +561,107 @@ function buildSuggestions({ description, budget, skill }) {
   }
 
   return { items, style, diff, bud };
+}
+
+// Minimal, deterministic design suggestions for $0 testing
+function stubDesignSuggestions({ description, budget, skill_level }) {
+  const desc = (description || '').slice(0, 140);
+  const bullets = [
+    `Materials: use oak or walnut with matte black hardware.`,
+    `Palette: warm whites + light gray; keep ${desc ? 'style consistent with the photo' : 'tones cohesive'}.`,
+    `Layout: balance symmetry; keep spacing even and respect studs @ 16" OC.`,
+    `Lighting: add warm LED strips or a single soft accent light.`,
+    `Accents: linen/rattan textures; one focal piece to avoid clutter.`
+  ];
+  return { bullets, tags: ['materials', 'palette', 'layout', 'lighting', 'accents'] };
+}
+
+// OpenAI provider via REST (no ESM import)
+async function openaiDesignSuggestions({ description, budget, skill_level }) {
+  if (!OPENAI_API_KEY) throw new Error('missing_openai_key');
+
+  const system = [
+    'You are an interior design assistant.',
+    'Return exactly 5 concise visual/design suggestions.',
+    'DO NOT include tool/safety/measurement advice.',
+    'Focus on: materials, color palette, layout/spacing, lighting, accents.',
+    'Output strict JSON with keys: { "bullets": string[5], "tags": string[] }.',
+    'Tags must be from: ["materials","palette","layout","lighting","accents"].'
+  ].join(' ');
+
+  const user = [
+    `Project: ${description || '(none)'}`,
+    `Budget: ${budget || '(unspecified)'}`,
+    `Skill: ${skill_level || '(unspecified)'}`
+  ].join('\n');
+
+  const body = {
+    model: SUGGESTIONS_OPENAI_MODEL,
+    temperature: 0.2,
+    max_tokens: 350,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ]
+  };
+
+  const res = await fetch(`${SUGGESTIONS_OPENAI_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error?.message || `openai_${res.status}`);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(json?.choices?.[0]?.message?.content || '{}');
+  } catch (_) { /* fall through */ }
+
+  if (!parsed || !Array.isArray(parsed.bullets))
+    throw new Error('openai_bad_json');
+
+  return {
+    bullets: parsed.bullets.slice(0, 5),
+    tags: Array.isArray(parsed.tags) ? parsed.tags : []
+  };
+}
+
+// Single entry that chooses provider (+ tiny 60s memo to cut repeats)
+const _memo = new Map();
+function _memoKey(p) {
+  return `${(p.description||'').trim()}|${p.budget||''}|${p.skill_level||''}|${SUGGESTIONS_PROVIDER}`;
+}
+async function makeDesignSuggestions(payload) {
+  const key = _memoKey(payload);
+  const hit = _memo.get(key);
+  const now = Date.now();
+  if (hit && (now - hit.t) < 60000) return hit.v;
+
+  let v;
+  if (SUGGESTIONS_PROVIDER === 'openai') {
+    try { v = await openaiDesignSuggestions(payload); }
+    catch (e) {
+      // Fail safe to stub to avoid UX dead-ends
+      v = stubDesignSuggestions(payload);
+      v.error = String(e.message || e);
+      v.provider = 'openai(fallback-stub)';
+      _memo.set(key, { v, t: now }); 
+      return v;
+    }
+    v.provider = 'openai';
+  } else {
+    v = stubDesignSuggestions(payload);
+    v.provider = 'stub';
+  }
+
+  _memo.set(key, { v, t: now });
+  return v;
 }
 
 // --- Projects: LIST ---
@@ -950,38 +1060,20 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
 app.post('/api/projects/:id/suggestions', async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = resolveUserId(req.body?.user_id || req.query?.user_id);
+    const { description, budget, skill_level } = req.body || {};
 
-    // Load the project to pull name/budget/skill (no auth gating)
-    const { data: proj, error } = await supabase
-      .from('projects')
-      .select('id, name, budget, skill_level, input_image_url')
-      .eq('id', id)
-      .maybeSingle();
+    if (!id) return res.status(422).json({ ok: false, error: 'invalid_project_id' });
+    if (!description || String(description).trim().length < 10) {
+      return res.status(422).json({ ok: false, error: 'invalid_description' });
+    }
 
-    if (error) throw error;
-    if (!proj) return res.status(404).json({ ok: false, error: 'not_found' });
+    // Optional: ensure project exists
+    const { data: p } = await supabase.from('projects').select('id').eq('id', id).maybeSingle();
+    if (!p) return res.status(404).json({ ok: false, error: 'not_found' });
 
-    const description = (req.body?.prompt || proj.name || '').trim();
-    const budget = proj.budget || req.body?.budget;
-    const skill  = proj.skill_level || req.body?.skill;
-
-    const out = buildSuggestions({ description, budget, skill });
-    const tags = [out.style, out.diff, out.bud].filter(Boolean);
-
-    return res.json({
-      ok: true,
-      items: out.items,
-      tags,
-      meta: {
-        style: out.style,
-        difficulty: out.diff,
-        budget: out.bud,
-        hasPhoto: !!proj.input_image_url
-      }
-    });
+    const data = await makeDesignSuggestions({ description, budget, skill_level });
+    return res.json({ ok: true, ...data });
   } catch (e) {
-    console.error('[SUGGESTIONS] error:', e);
     return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
