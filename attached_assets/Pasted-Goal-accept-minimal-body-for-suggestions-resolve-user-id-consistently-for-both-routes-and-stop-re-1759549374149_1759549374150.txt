@@ -1,0 +1,61 @@
+Goal: accept minimal body for suggestions, resolve user_id consistently for both routes, and stop returning 403 when the user is valid.
+
+You are working in the diy-genie-webhooks repo. Make these exact changes in index.js:
+
+1) Add a resolver util near the top:
+function resolveUserIdFrom(req) {
+  const raw = (req.query.user_id || req.body?.user_id || req.params?.user_id || '').trim();
+  if (!raw || raw === 'auto') return process.env.TEST_USER_ID;
+  return raw;
+}
+
+2) Harden build quota middleware (requirePreviewOrBuildQuota):
+- At the start of the try block, set:
+  let userId = resolveUserIdFrom(req);
+  if (!userId) return res.status(403).json({ ok:false, error:'no_user' });
+  req.user_id = userId;
+
+- Keep existing entitlements lookup. If lookup fails, default to { tier:'free', quota:2, previewAllowed:false, remaining:2 } (no 403). Only 403 if you explicitly want to block — for this app do NOT block build-without-preview; allow it.
+
+3) Update POST /api/projects
+- When reading body, map skill → skill_level if present.
+- Use resolveUserIdFrom(req) for the user id.
+- Keep 422 validations but never 500; return { ok:false, error:'invalid_*' }.
+
+4) Implement (or update) POST /api/projects/:id/suggestions
+- Accept body { user_id, name, budget, skill_level, photo_uri? }.
+- If OpenAI key present, call it; else return a stub.
+  Pseudocode:
+    const user_id = resolveUserIdFrom(req);
+    const { name='', budget='', skill_level='' } = req.body || {};
+    if (!name || !budget || !skill_level) return res.status(422).json({ ok:false, error:'invalid_payload' });
+
+    const prompt = `You are a DIY design assistant. Project: ${name}. Budget: ${budget}. Skill: ${skill_level}.
+    Suggest 5 short, concrete design suggestions. Output JSON {items: string[], tags: string[]}.`;
+
+    let items = [
+      "Match materials and finishes across the space.",
+      "Plan cuts and layout around studs at 16\" OC.",
+      "Use jigs or guides for consistent spacing.",
+      "Prefinish parts before assembly.",
+      "Label hardware bags to speed assembly."
+    ];
+    let tags = ["modern","budget-conscious","intermediate"];
+
+    if (process.env.OPENAI_API_KEY) {
+      // Use OpenAI responses safely; 2s timeout; guard JSON parsing.
+      // (Implement with your existing OpenAI client or fetch; parse JSON, fallback to stub on errors)
+    }
+
+    return res.json({ ok:true, items, tags });
+
+5) POST /api/projects/:id/build-without-preview
+- Require only { user_id, prompt }.
+- Use resolveUserIdFrom(req).
+- Do NOT 403 for tiers; just queue the build (or return {ok:true,status:'queued'}).
+
+6) Add concise server logs for all three endpoints showing user_id, project id, and reason on non-200s.
+
+Republish. Verify with the Theme app:
+- /suggestions returns 200 JSON with items/tags
+- /build-without-preview returns 200 and Theme navigates.

@@ -63,6 +63,13 @@ function resolveUserId(raw) {
   return id;
 }
 
+// Resolver util to extract user_id from req
+function resolveUserIdFrom(req) {
+  const raw = (req.query.user_id || req.body?.user_id || req.params?.user_id || '').trim();
+  if (!raw || raw === 'auto') return process.env.TEST_USER_ID;
+  return raw;
+}
+
 // Ensure there is an auth.users row; required before touching `profiles`
 async function ensureAuthUserExists(supabase, userId, email) {
   if (!userId) return { ok: false, error: 'missing_test_user_id' };
@@ -179,44 +186,22 @@ async function ensureProfile(supabase, userId) {
 // Middleware to check preview/build quota (for preview and build endpoints only)
 async function requirePreviewOrBuildQuota(req, res, next) {
   try {
-    let userId = req.query.user_id || req.body.user_id || req.params.user_id || req.user_id;
-    
-    // Handle "auto" user_id - create temporary user with valid UUID
-    if (userId === 'auto') {
-      // Generate valid UUID v4
-      userId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = Math.random() * 16 | 0;
-        const v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-      });
-      req.user_id = userId;
-      // Auto-create profile with free tier
-      await supabase.from('profiles').insert({ user_id: userId, plan_tier: 'free' }).select().single();
-    }
-    
-    if (!userId) {
-      console.log('[ERROR] missing_user_id - body:', JSON.stringify(req.body || {}));
-      return res.status(400).json({ ok:false, error:'missing_user_id' });
-    }
+    let userId = resolveUserIdFrom(req);
+    if (!userId) return res.status(403).json({ ok: false, error: 'no_user' });
+    req.user_id = userId;
 
-    const ent = await getEntitlements(supabase, userId);
-    
-    // Check if preview is allowed (for preview endpoint)
-    if (!ent.previewAllowed) {
-      return res.status(403).json({ ok:false, error:'upgrade_required' });
-    }
-    
-    // Check if quota remaining (for both preview and build)
-    if (ent.remaining <= 0) {
-      return res.status(403).json({ ok:false, error:'upgrade_required' });
+    let ent;
+    try {
+      ent = await getEntitlements(supabase, userId);
+    } catch (err) {
+      ent = { tier: 'free', quota: 2, previewAllowed: false, remaining: 2 };
     }
 
     req.entitlements = ent;
-    req.user_id = userId;
     next();
   } catch (e) {
     console.log('[ERROR] requirePreviewOrBuildQuota:', e.message);
-    res.status(500).json({ ok:false, error:String(e) });
+    res.status(500).json({ ok: false, error: String(e) });
   }
 }
 
@@ -701,46 +686,48 @@ app.get('/api/projects/:id', async (req, res) => {
 // NEVER gated - project creation is always allowed regardless of tier
 app.post('/api/projects', async (req, res) => {
   try {
-    let { user_id, name, budget, skill, skill_level } = req.body || {};
-    const resolvedUserId = resolveUserId(user_id);
+    let { name, budget, skill, skill_level } = req.body || {};
+    const userId = resolveUserIdFrom(req);
+
+    // Map skill → skill_level if present
+    const skillLevel = skill_level || skill;
 
     // Basic validation
-    if (!resolvedUserId) return res.status(422).json({ ok: false, error: 'invalid_user', details: 'TEST_USER_ID not set' });
-    if (!name || String(name).trim().length < 10) return res.status(422).json({ ok: false, error: 'invalid_name', details: 'name must be ≥ 10 chars' });
+    if (!userId) return res.status(422).json({ ok: false, error: 'invalid_user' });
+    if (!name || String(name).trim().length < 10) return res.status(422).json({ ok: false, error: 'invalid_name' });
     if (!budget) return res.status(422).json({ ok: false, error: 'invalid_budget' });
-    const skillLevel = skill_level || skill;
     if (!skillLevel) return res.status(422).json({ ok: false, error: 'invalid_skill_level' });
 
     // Ensure dev auth user exists (only needed for TEST_USER_ID path)
-    if (resolvedUserId === TEST_USER_ID) {
-      const okUser = await ensureAuthUserExists(supabase, resolvedUserId, TEST_USER_EMAIL);
-      if (!okUser.ok) return res.status(422).json({ ok: false, error: 'auth_user_missing', details: okUser.error });
+    if (userId === TEST_USER_ID) {
+      const okUser = await ensureAuthUserExists(supabase, userId, TEST_USER_EMAIL);
+      if (!okUser.ok) return res.status(422).json({ ok: false, error: 'auth_user_missing' });
     }
 
     // Ensure profile exists (FK will now succeed)
     let { data: prof, error: profErr } = await supabase
       .from('profiles')
       .select('plan_tier')
-      .eq('user_id', resolvedUserId)
+      .eq('user_id', userId)
       .maybeSingle();
 
     if (!prof && profErr && profErr.code === 'PGRST116') {
       const { data: newProf, error: insertErr } = await supabase
         .from('profiles')
-        .insert({ user_id: resolvedUserId, plan_tier: 'free' })
+        .insert({ user_id: userId, plan_tier: 'free' })
         .select('plan_tier')
         .maybeSingle();
-      if (insertErr) return res.status(422).json({ ok: false, error: 'profile_insert_failed', details: String(insertErr.message || insertErr) });
+      if (insertErr) return res.status(422).json({ ok: false, error: 'profile_insert_failed' });
       prof = newProf;
     } else if (profErr && !prof) {
-      return res.status(422).json({ ok: false, error: 'profile_lookup_failed', details: String(profErr.message || profErr) });
+      return res.status(422).json({ ok: false, error: 'profile_lookup_failed' });
     }
 
     // Create project
     const { data: inserted, error: projectErr } = await supabase
       .from('projects')
       .insert({
-        user_id: resolvedUserId,
+        user_id: userId,
         name: String(name).trim(),
         budget,
         status: 'draft'
@@ -749,12 +736,15 @@ app.post('/api/projects', async (req, res) => {
       .maybeSingle();
 
     if (projectErr || !inserted?.id) {
-      return res.status(422).json({ ok: false, error: 'insert_failed', details: String(projectErr?.message || projectErr || 'no_id') });
+      console.log(`[POST /api/projects] insert_failed: ${projectErr?.message || 'no_id'}`);
+      return res.status(422).json({ ok: false, error: 'insert_failed' });
     }
 
+    console.log(`[POST /api/projects] user_id=${userId}, project_id=${inserted.id}`);
     return res.json({ ok: true, item: inserted });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: 'server_error', details: String(e.message || e) });
+    console.log(`[POST /api/projects] error: ${e.message}`);
+    return res.status(422).json({ ok: false, error: 'invalid_request' });
   }
 });
 
@@ -945,11 +935,16 @@ app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, re
 
 // --- Build without preview route --------------------------------------------
 // POST /api/projects/:id/build-without-preview
-// Gated by tier - requires remaining quota (free tier blocked via previewAllowed check)
-app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, async (req, res) => {
+app.post('/api/projects/:id/build-without-preview', async (req, res) => {
   try {
     const { id } = req.params;
-    const { description, budget, skill_level } = req.body || {};
+    const user_id = resolveUserIdFrom(req);
+    const { prompt } = req.body || {};
+
+    if (!user_id || !prompt) {
+      console.log(`[POST /api/projects/:id/build-without-preview] missing user_id or prompt`);
+      return res.status(422).json({ ok: false, error: 'invalid_payload' });
+    }
 
     // Get project details
     const { data: project, error: pErr } = await supabase
@@ -959,7 +954,8 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
       .single();
 
     if (pErr || !project) {
-      return res.status(404).json({ ok:false, error: 'project_not_found' });
+      console.log(`[POST /api/projects/:id/build-without-preview] project not found: ${id}`);
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
     }
 
     // Mark plan requested (idempotent - skip if already has plan)
@@ -970,7 +966,8 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
     }
 
     // Return immediately
-    res.json({ ok:true });
+    console.log(`[POST /api/projects/:id/build-without-preview] user_id=${user_id}, project_id=${id}, status=queued`);
+    res.json({ ok: true, status: 'queued' });
 
     // Background processing with provider selection (skip if already has plan)
     if (!project.plan_json) {
@@ -983,9 +980,9 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
             try {
               console.log(`[Plan] Calling OpenAI for project ${id}`);
               planData = await callOpenAIGeneratePlan({
-                description: description || project.name || 'DIY project',
-                budget: budget || project.budget || 'medium',
-                skill_level: skill_level || project.skill || 'beginner'
+                description: prompt || project.name || 'DIY project',
+                budget: project.budget || 'medium',
+                skill_level: project.skill_level || 'beginner'
               });
               console.log(`[Plan] OpenAI success for ${id}`);
             } catch (openaiErr) {
@@ -1004,8 +1001,8 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
 
           // Generate stub plan if needed
           if (!planData) {
-            const projBudget = budget || project.budget || 'medium';
-            const projSkill = skill_level || project.skill || 'beginner';
+            const projBudget = project.budget || 'medium';
+            const projSkill = project.skill_level || 'beginner';
             const budgetMap = { low: '$', medium: '$$', high: '$$$' };
             const budgetLabel = budgetMap[projBudget] || '$$';
             
@@ -1060,21 +1057,69 @@ app.post('/api/projects/:id/build-without-preview', requirePreviewOrBuildQuota, 
 app.post('/api/projects/:id/suggestions', async (req, res) => {
   try {
     const { id } = req.params;
-    const { description, budget, skill_level } = req.body || {};
+    const user_id = resolveUserIdFrom(req);
+    const { name = '', budget = '', skill_level = '', photo_uri } = req.body || {};
 
-    if (!id) return res.status(422).json({ ok: false, error: 'invalid_project_id' });
-    if (!description || String(description).trim().length < 10) {
-      return res.status(422).json({ ok: false, error: 'invalid_description' });
+    if (!name || !budget || !skill_level) {
+      return res.status(422).json({ ok: false, error: 'invalid_payload' });
     }
 
-    // Optional: ensure project exists
-    const { data: p } = await supabase.from('projects').select('id').eq('id', id).maybeSingle();
-    if (!p) return res.status(404).json({ ok: false, error: 'not_found' });
+    const prompt = `You are a DIY design assistant. Project: ${name}. Budget: ${budget}. Skill: ${skill_level}.
+Suggest 5 short, concrete design suggestions. Output JSON {items: string[], tags: string[]}.`;
 
-    const data = await makeDesignSuggestions({ description, budget, skill_level });
-    return res.json({ ok: true, ...data });
+    let items = [
+      "Match materials and finishes across the space.",
+      "Plan cuts and layout around studs at 16\" OC.",
+      "Use jigs or guides for consistent spacing.",
+      "Prefinish parts before assembly.",
+      "Label hardware bags to speed assembly."
+    ];
+    let tags = ["modern", "budget-conscious", "intermediate"];
+
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+
+        const response = await fetch(`${SUGGESTIONS_OPENAI_BASE}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: SUGGESTIONS_OPENAI_MODEL,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.7
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeout);
+
+        if (response.ok) {
+          const data = await response.json();
+          const content = data.choices?.[0]?.message?.content;
+          if (content) {
+            try {
+              const parsed = JSON.parse(content);
+              if (parsed.items && Array.isArray(parsed.items)) items = parsed.items;
+              if (parsed.tags && Array.isArray(parsed.tags)) tags = parsed.tags;
+            } catch (parseErr) {
+              console.log('[suggestions] JSON parse failed, using stub');
+            }
+          }
+        }
+      } catch (openaiErr) {
+        console.log('[suggestions] OpenAI error, using stub:', openaiErr.message);
+      }
+    }
+
+    console.log(`[POST /api/projects/:id/suggestions] user_id=${user_id}, project_id=${id}`);
+    return res.json({ ok: true, items, tags });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
+    console.log(`[POST /api/projects/:id/suggestions] error: ${e.message}`);
+    return res.status(422).json({ ok: false, error: 'invalid_request' });
   }
 });
 
