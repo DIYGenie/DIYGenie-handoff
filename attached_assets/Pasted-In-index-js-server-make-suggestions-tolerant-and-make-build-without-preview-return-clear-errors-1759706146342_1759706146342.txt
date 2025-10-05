@@ -1,0 +1,64 @@
+In index.js (server), make /suggestions tolerant and make /build-without-preview return clear errors (and allow dev bypass).
+
+1) Add a helper at top-level (near other helpers):
+   async function getProjectById(supabase, id) {
+     const { data, error } = await supabase.from('projects').select('*').eq('id', id).maybeSingle();
+     if (error) throw error;
+     return data || null;
+   }
+   function normSkill(x) { return (x || '').toString().toLowerCase() || 'intermediate'; }
+   function normBudget(x){ return (x || '$$').toString(); }
+
+2) PATCH: POST /api/projects/:id/suggestions
+   - Do NOT 422 on missing fields. Read the project by id and derive inputs.
+   - Accept body fields { user_id, desc, budget, skill, skill_level } but all optional.
+   - Always respond 200 with { ok:true, suggestions:[...], tags:[...] } or 500 with a clear message.
+
+   Example implementation:
+   app.post('/api/projects/:id/suggestions', async (req,res)=>{
+     try {
+       const { id } = req.params;
+       const p = await getProjectById(supabase, id);
+       if (!p) return res.status(404).json({ ok:false, error:'not_found' });
+
+       const body = req.body || {};
+       const desc = (body.desc || p.name || p.description || '').toString().trim();
+       const budget = normBudget(body.budget || p.budget);
+       const skill_level = normSkill(body.skill_level || body.skill || p.skill_level);
+
+       // For now return deterministic starter tips (no OpenAI required)
+       const suggestions = [
+         `Use materials that match the room (e.g., oak/walnut for warm tones).`,
+         `Locate wall studs and keep brackets aligned; 16" OC is typical.`,
+         `Pre-finish shelf parts before mounting to save cleanup.`,
+         `Label hardware in bags to speed up assembly.`,
+         `Keep lighting consistent (warm LED) to match the space.`,
+       ];
+       const tags = [skill_level, budget].filter(Boolean);
+
+       return res.json({ ok:true, suggestions, tags });
+     } catch (e) {
+       console.error('[SUGGESTIONS]', e);
+       return res.status(500).json({ ok:false, error: String(e.message || e) });
+     }
+   });
+
+3) PATCH: middleware / entitlement check for build-without-preview
+   - When quota is exceeded, respond 403 with { ok:false, error:'quota_exhausted', remaining, tier }.
+   - In development (NODE_ENV !== 'production') add a soft bypass: if something fails fetching entitlements, allow one build and log.
+
+   In the handler for POST /api/projects/:id/build-without-preview:
+   - Wrap the entitlement call in try/catch. On error, if process.env.NODE_ENV !== 'production', log and continue.
+   - If you do enforce quota and remaining <= 0, send:
+       return res.status(403).json({ ok:false, error:'quota_exhausted', remaining, tier });
+
+   Keep the success path the same but always include { ok:true, id } in JSON.
+
+4) OPTIONAL (dev convenience): set a big free quota during development:
+   const TIER_RULES = {
+     free: { quota: process.env.DEV_NO_QUOTA ? 999 : 2, preview: false },
+     pro:  { quota: 25, preview: true },
+   };
+
+5) Ensure CORS still allows POSTs and that body parsing stays enabled.
+Rebuild & run.

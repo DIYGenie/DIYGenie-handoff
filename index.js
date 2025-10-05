@@ -70,6 +70,23 @@ function resolveUserIdFrom(req) {
   return raw;
 }
 
+// Helper to get project by ID
+async function getProjectById(supabase, id) {
+  const { data, error } = await supabase.from('projects').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+// Normalize skill level
+function normSkill(x) { 
+  return (x || '').toString().toLowerCase() || 'intermediate'; 
+}
+
+// Normalize budget
+function normBudget(x) { 
+  return (x || '$$').toString(); 
+}
+
 // Ensure there is an auth.users row; required before touching `profiles`
 async function ensureAuthUserExists(supabase, userId, email) {
   if (!userId) return { ok: false, error: 'missing_test_user_id' };
@@ -94,7 +111,7 @@ async function ensureAuthUserExists(supabase, userId, email) {
 
 // --- ENTITLEMENTS CONFIG ---
 const TIER_RULES = {
-  free:   { quota: 2,  preview: false },
+  free:   { quota: process.env.DEV_NO_QUOTA ? 999 : 2,  preview: false },
   casual: { quota: 5,  preview: true  },
   pro:    { quota: 25, preview: true  },
 };
@@ -946,6 +963,30 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
       return res.status(422).json({ ok: false, error: 'invalid_payload' });
     }
 
+    // Check entitlements (with dev bypass)
+    let ent;
+    try {
+      ent = await getEntitlements(supabase, user_id);
+      
+      // Enforce quota if we have valid entitlements
+      if (ent.remaining <= 0) {
+        return res.status(403).json({ 
+          ok: false, 
+          error: 'quota_exhausted', 
+          remaining: ent.remaining,
+          tier: ent.tier 
+        });
+      }
+    } catch (entErr) {
+      // Dev bypass: if entitlements fail and we're not in production, allow one build
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[build-without-preview] Entitlements failed, dev bypass enabled:', entErr.message);
+        ent = { tier: 'free', remaining: 1 };
+      } else {
+        throw entErr;
+      }
+    }
+
     // Get project details
     const { data: project, error: pErr } = await supabase
       .from('projects')
@@ -965,9 +1006,9 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
         .eq('id', id);
     }
 
-    // Return immediately
+    // Return immediately with project id
     console.log(`[POST /api/projects/:id/build-without-preview] user_id=${user_id}, project_id=${id}, status=queued`);
-    res.json({ ok: true, status: 'queued' });
+    res.json({ ok: true, id });
 
     // Background processing with provider selection (skip if already has plan)
     if (!project.plan_json) {
@@ -1057,69 +1098,28 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
 app.post('/api/projects/:id/suggestions', async (req, res) => {
   try {
     const { id } = req.params;
-    const user_id = resolveUserIdFrom(req);
-    const { name = '', budget = '', skill_level = '', photo_uri } = req.body || {};
+    const p = await getProjectById(supabase, id);
+    if (!p) return res.status(404).json({ ok: false, error: 'not_found' });
 
-    if (!name || !budget || !skill_level) {
-      return res.status(422).json({ ok: false, error: 'invalid_payload' });
-    }
+    const body = req.body || {};
+    const desc = (body.desc || p.name || p.description || '').toString().trim();
+    const budget = normBudget(body.budget || p.budget);
+    const skill_level = normSkill(body.skill_level || body.skill || p.skill_level);
 
-    const prompt = `You are a DIY design assistant. Project: ${name}. Budget: ${budget}. Skill: ${skill_level}.
-Suggest 5 short, concrete design suggestions. Output JSON {items: string[], tags: string[]}.`;
-
-    let items = [
-      "Match materials and finishes across the space.",
-      "Plan cuts and layout around studs at 16\" OC.",
-      "Use jigs or guides for consistent spacing.",
-      "Prefinish parts before assembly.",
-      "Label hardware bags to speed assembly."
+    // Return deterministic starter tips
+    const suggestions = [
+      `Use materials that match the room (e.g., oak/walnut for warm tones).`,
+      `Locate wall studs and keep brackets aligned; 16" OC is typical.`,
+      `Pre-finish shelf parts before mounting to save cleanup.`,
+      `Label hardware in bags to speed up assembly.`,
+      `Keep lighting consistent (warm LED) to match the space.`,
     ];
-    let tags = ["modern", "budget-conscious", "intermediate"];
+    const tags = [skill_level, budget].filter(Boolean);
 
-    if (process.env.OPENAI_API_KEY) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 2000);
-
-        const response = await fetch(`${SUGGESTIONS_OPENAI_BASE}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: SUGGESTIONS_OPENAI_MODEL,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.7
-          }),
-          signal: controller.signal
-        });
-
-        clearTimeout(timeout);
-
-        if (response.ok) {
-          const data = await response.json();
-          const content = data.choices?.[0]?.message?.content;
-          if (content) {
-            try {
-              const parsed = JSON.parse(content);
-              if (parsed.items && Array.isArray(parsed.items)) items = parsed.items;
-              if (parsed.tags && Array.isArray(parsed.tags)) tags = parsed.tags;
-            } catch (parseErr) {
-              console.log('[suggestions] JSON parse failed, using stub');
-            }
-          }
-        }
-      } catch (openaiErr) {
-        console.log('[suggestions] OpenAI error, using stub:', openaiErr.message);
-      }
-    }
-
-    console.log(`[POST /api/projects/:id/suggestions] user_id=${user_id}, project_id=${id}`);
-    return res.json({ ok: true, items, tags });
+    return res.json({ ok: true, suggestions, tags });
   } catch (e) {
-    console.log(`[POST /api/projects/:id/suggestions] error: ${e.message}`);
-    return res.status(422).json({ ok: false, error: 'invalid_request' });
+    console.error('[SUGGESTIONS]', e);
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
