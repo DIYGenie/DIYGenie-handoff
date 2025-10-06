@@ -1,0 +1,88 @@
+Replace your old /api/projects/:id/suggestions-smart body with this version that:
+
+reads goal / budget / skill / input_image_url
+
+generates up to 6 short chip suggestions
+
+returns { ok:true, suggestions:[{text,tag}] }
+
+// --- Smart prompt coach route ---
+app.post('/api/projects/:id/suggestions-smart', async (req, res) => {
+  try {
+    const id = req.params.id?.trim();
+    if (!id) return res.status(400).json({ ok:false, error:'missing_project_id' });
+
+    const { data: p, error } = await supabase
+      .from('projects')
+      .select('id, goal, name, budget, skill, input_image_url')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) return res.status(500).json({ ok:false, error:error.message });
+    if (!p) return res.status(404).json({ ok:false, error:'project_not_found' });
+
+    const goal = (p.goal || p.name || '').toLowerCase();
+    const budget = (p.budget || '').toUpperCase();
+    const skill  = (p.skill || '').toLowerCase();
+    const hasPhoto = !!p.input_image_url;
+
+    const tips = [];
+    const add = (text, tag='general') => { tips.push({ text, tag }); };
+
+    // --- Core prompt sharpeners ---
+    if (goal.length < 30) add('Add size or material details (width × depth × finish)', 'clarity');
+    add('Mention room and main colors for a better visual match', 'context');
+
+    // --- Category-based heuristics ---
+    if (/\bshelf|shelv/.test(goal)) {
+      add('Specify shelf thickness (¾" vs 1")', 'materials');
+      add('Hidden vs visible brackets?', 'style');
+    }
+    if (/\bbench\b/.test(goal)) {
+      add('Seat height 17–18", depth 16–18"', 'ergonomics');
+      add('Include storage type (cubbies vs drawers)', 'storage');
+    }
+    if (/\bpaint|accent wall\b/.test(goal)) {
+      add('Include paint sheen + surface prep', 'finish');
+    }
+
+    // --- Budget / skill cues ---
+    if (budget === '$') add('Ask for cost-saving alternatives', 'budget');
+    if (budget === '$$$') add('Call out premium hardware or finish', 'premium');
+    if (skill === 'beginner') add('Ask for tool-light or pre-cut method', 'beginner');
+    if (skill === 'advanced') add('Allow joinery (dados, domino, lamination)', 'advanced');
+
+    // --- Photo-aware ---
+    if (hasPhoto) {
+      add('Note outlets or trim clearances visible in photo', 'photo');
+      add('Match wood tone to lightest furniture in photo', 'photo');
+      add('Target ~70% wall width for balanced proportion', 'photo');
+    } else {
+      add('Upload a clear room photo for layout-aware ideas', 'photo');
+    }
+
+    // --- Dedup + cap 6 ---
+    const seen = new Set();
+    const uniq = tips.filter(t => !seen.has(t.text) && seen.add(t.text)).slice(0, 6);
+
+    return res.json({ ok:true, suggestions: uniq });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error: e.message || 'server_error' });
+  }
+});
+
+
+✅ Acceptance Check
+
+Hitting POST /api/projects/:id/suggestions-smart now gives you an array like:
+
+{
+  "ok": true,
+  "suggestions": [
+    { "text": "Specify shelf thickness (¾\" vs 1\")", "tag": "materials" },
+    { "text": "Hidden vs visible brackets?", "tag": "style" },
+    { "text": "Note outlets or trim clearances visible in photo", "tag": "photo" }
+  ]
+}
+
+
+When the app refreshes suggestions after a photo upload, the new “Prompt Coach” chips reflect that logic.
