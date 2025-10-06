@@ -1,0 +1,66 @@
+Relax validation; accept multiple payload shapes; never 422 on well-formed :id.
+
+Do:
+
+In server.js, find:
+
+app.post('/api/projects/:id/build-without-preview', async (req, res) => { ... })
+
+
+Replace the handler body with this tolerant version:
+
+app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+  try {
+    const id = (req.params.id || req.body?.project_id || req.body?.id)?.trim();
+    if (!id) return res.status(400).json({ ok: false, error: 'missing_project_id' });
+
+    // Optional: honor user id if provided via body, query, or header
+    const userId =
+      req.body?.user_id ||
+      req.query?.user_id ||
+      req.headers['x-user-id'] ||
+      null;
+
+    // Verify project exists
+    const { data: proj, error: getErr } = await supabase
+      .from('projects')
+      .select('id, status, input_image_url')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (getErr) return res.status(500).json({ ok: false, error: getErr.message });
+    if (!proj) return res.status(404).json({ ok: false, error: 'project_not_found' });
+
+    // Minimal preconditions: allow build without preview; just ensure we have an image if your flow requires it
+    // If you want to require an image, uncomment the next lines:
+    // if (!proj.input_image_url) {
+    //   return res.status(400).json({ ok: false, error: 'missing_input_image_url' });
+    // }
+
+    // Mark project ready; clear preview_url
+    const { error: updErr } = await supabase
+      .from('projects')
+      .update({ status: 'ready', preview_url: null })
+      .eq('id', id);
+
+    if (updErr) return res.status(500).json({ ok: false, error: updErr.message });
+
+    // Optionally enqueue a background job here later
+
+    // 202 to indicate accepted for processing
+    return res.status(202).json({ ok: true, project_id: id, accepted: true, user_id: userId });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
+  }
+});
+
+
+Notes:
+
+Accepts empty body, { id }, { project_id }, { user_id, project_id }, query ?user_id=..., or x-user-id header.
+
+Only rejects when id missing or project not found.
+
+Returns 202 on success.
+
+Acceptance: Your current client calls (including our probes) now return 202 { ok: true }. You can remove the client “compat patch” afterwards.

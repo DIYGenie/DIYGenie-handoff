@@ -979,119 +979,46 @@ app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, re
 // POST /api/projects/:id/build-without-preview
 app.post('/api/projects/:id/build-without-preview', async (req, res) => {
   try {
-    const { id } = req.params;
-    const p = await getProjectById(id);
-    if (!p) return res.status(404).json({ ok: false, error: 'not_found' });
+    const id = (req.params.id || req.body?.project_id || req.body?.id)?.trim();
+    if (!id) return res.status(400).json({ ok: false, error: 'missing_project_id' });
 
-    // Resolve user_id from request or project
-    const user_id = resolveUserIdFrom(req) || p.user_id;
-    const prompt = norm(req.body?.prompt, '');
-    
-    if (!user_id || !prompt) {
-      return res.status(422).json({ ok: false, error: 'invalid_payload' });
-    }
+    // Optional: honor user id if provided via body, query, or header
+    const userId =
+      req.body?.user_id ||
+      req.query?.user_id ||
+      req.headers['x-user-id'] ||
+      null;
 
-    const ents = await getEntitlements(user_id);
-    if (!DEV_BYPASS && ents.remaining <= 0) {
-      return res.status(403).json({ 
-        ok: false, 
-        error: 'quota_exhausted', 
-        tier: ents.tier, 
-        remaining: ents.remaining 
-      });
-    }
+    // Verify project exists
+    const { data: proj, error: getErr } = await supabase
+      .from('projects')
+      .select('id, status, input_image_url')
+      .eq('id', id)
+      .maybeSingle();
 
-    // Mark plan requested (idempotent - skip if already has plan)
-    if (!p.plan_json) {
-      await supabase.from('projects')
-        .update({ status: 'plan_requested' })
-        .eq('id', id);
-    }
+    if (getErr) return res.status(500).json({ ok: false, error: getErr.message });
+    if (!proj) return res.status(404).json({ ok: false, error: 'project_not_found' });
 
-    // Return immediately with project id
-    console.log(`[POST /api/projects/:id/build-without-preview] user_id=${user_id}, project_id=${id}, status=queued`);
-    res.json({ ok: true, id });
+    // Minimal preconditions: allow build without preview; just ensure we have an image if your flow requires it
+    // If you want to require an image, uncomment the next lines:
+    // if (!proj.input_image_url) {
+    //   return res.status(400).json({ ok: false, error: 'missing_input_image_url' });
+    // }
 
-    // Background processing with provider selection (skip if already has plan)
-    if (!p.plan_json) {
-      (async () => {
-        try {
-          let planData = null;
-          let useStubDelay = false;
+    // Mark project ready; clear preview_url
+    const { error: updErr } = await supabase
+      .from('projects')
+      .update({ status: 'ready', preview_url: null })
+      .eq('id', id);
 
-          if (PLAN_PROVIDER === 'openai' && OPENAI_API_KEY) {
-            try {
-              console.log(`[Plan] Calling OpenAI for project ${id}`);
-              planData = await callOpenAIGeneratePlan({
-                description: prompt || p.name || 'DIY project',
-                budget: p.budget || 'medium',
-                skill_level: p.skill_level || 'beginner'
-              });
-              console.log(`[Plan] OpenAI success for ${id}`);
-            } catch (openaiErr) {
-              console.error(`[Plan] OpenAI failed for ${id}, falling back to stub:`, openaiErr.message);
-              useStubDelay = true;
-            }
-          } else {
-            console.log(`[Plan] Using stub for ${id} (provider: ${PLAN_PROVIDER})`);
-            useStubDelay = true;
-          }
+    if (updErr) return res.status(500).json({ ok: false, error: updErr.message });
 
-          // Apply stub delay for fallback or stub mode
-          if (useStubDelay) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-          }
+    // Optionally enqueue a background job here later
 
-          // Generate stub plan if needed
-          if (!planData) {
-            const projBudget = p.budget || 'medium';
-            const projSkill = p.skill_level || 'beginner';
-            const budgetMap = { low: '$', medium: '$$', high: '$$$' };
-            const budgetLabel = budgetMap[projBudget] || '$$';
-            
-            planData = {
-              summary: {
-                title: p.name || 'DIY Project',
-                est_cost: budgetLabel,
-                est_time: projSkill === 'advanced' ? '8-12 hours' : projSkill === 'intermediate' ? '4-8 hours' : '2-4 hours',
-                difficulty: projSkill
-              },
-              steps: [
-                { title: 'Preparation', detail: 'Gather all materials and prepare workspace', duration_minutes: 30 },
-                { title: 'Main Work', detail: 'Execute the core project tasks', duration_minutes: 120 },
-                { title: 'Finishing Touches', detail: 'Add final details and clean up', duration_minutes: 45 }
-              ],
-              tools: ['Basic toolkit', 'Safety equipment'],
-              materials: [
-                { name: 'Primary materials', qty: '1', unit: 'set' }
-              ],
-              safety: ['Wear safety goggles', 'Keep workspace ventilated'],
-              tips: ['Take your time', 'Measure twice, cut once']
-            };
-          }
-
-          // Update to plan_ready with plan data
-          await supabase.from('projects')
-            .update({ 
-              status: 'plan_ready',
-              plan_json: planData
-            })
-            .eq('id', id);
-          
-          console.log(`[Plan] Completed for ${id}`);
-        } catch (bgErr) {
-          console.error(`[Plan] Background error for ${id}:`, bgErr);
-          // Set to error state
-          await supabase.from('projects')
-            .update({ status: 'plan_error' })
-            .eq('id', id);
-        }
-      })();
-    }
-
-  } catch (err) {
-    console.error('[build-without-preview] error:', err);
-    return res.status(500).json({ ok:false, error:'build_without_preview_failed' });
+    // 202 to indicate accepted for processing
+    return res.status(202).json({ ok: true, project_id: id, accepted: true, user_id: userId });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || 'server_error' });
   }
 });
 
