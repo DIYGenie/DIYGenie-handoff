@@ -319,38 +319,81 @@ app.get('/', (req, res) => res.json({
 // --- Entitlements endpoint ---
 // GET /me/entitlements/:userId
 app.get('/me/entitlements/:userId', async (req, res) => {
+  const defaults = { tier: 'Free', quota: 2, remaining: 2, previewAllowed: false };
   try {
-    const userId = req.params.userId;
-    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
-    const debug = req.query.debug === '1' || req.query._debug === '1';
-    const ent = await getEntitlements(supabase, userId, { debug });
-    res.json({ ok:true, ...ent });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:String(e) });
+    const userId = req.params.userId?.trim();
+    if (!userId) return res.json({ ok: true, ...defaults });
+
+    // attempt lookup; if not found, fall back
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('subscription_tier, plan_quota_monthly, plan_credits_used_month')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error || !profile) return res.json({ ok: true, ...defaults });
+
+    const tier = profile.subscription_tier || 'Free';
+    const quota = profile.plan_quota_monthly ?? (tier === 'Pro' ? 25 : tier === 'Casual' ? 5 : 2);
+    const used  = profile.plan_credits_used_month ?? 0;
+    const remaining = Math.max(0, quota - used);
+
+    return res.json({ ok: true, tier, quota, remaining, previewAllowed: tier !== 'Free' });
+  } catch {
+    return res.json({ ok: true, tier: 'Free', quota: 2, remaining: 2, previewAllowed: false });
   }
 });
+
 app.get('/api/me/entitlements/:userId', async (req, res) => {
+  const defaults = { tier: 'Free', quota: 2, remaining: 2, previewAllowed: false };
   try {
-    const userId = req.params.userId;
-    if (!userId) return res.status(400).json({ ok:false, error:'missing_user_id' });
-    const debug = req.query.debug === '1' || req.query._debug === '1';
-    const ent = await getEntitlements(supabase, userId, { debug });
-    res.json({ ok:true, ...ent });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:String(e) });
+    const userId = req.params.userId?.trim();
+    if (!userId) return res.json({ ok: true, ...defaults });
+
+    // attempt lookup; if not found, fall back
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('subscription_tier, plan_quota_monthly, plan_credits_used_month')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error || !profile) return res.json({ ok: true, ...defaults });
+
+    const tier = profile.subscription_tier || 'Free';
+    const quota = profile.plan_quota_monthly ?? (tier === 'Pro' ? 25 : tier === 'Casual' ? 5 : 2);
+    const used  = profile.plan_credits_used_month ?? 0;
+    const remaining = Math.max(0, quota - used);
+
+    return res.json({ ok: true, tier, quota, remaining, previewAllowed: tier !== 'Free' });
+  } catch {
+    return res.json({ ok: true, tier: 'Free', quota: 2, remaining: 2, previewAllowed: false });
   }
 });
 
 // GET /me/entitlements (query param version)
 app.get('/me/entitlements', async (req, res) => {
+  const defaults = { tier: 'Free', quota: 2, remaining: 2, previewAllowed: false };
   try {
-    const userId = req.query.user_id;
-    if (!userId) return res.status(400).json({ error: 'user_id_required' });
-    const debug = req.query.debug === '1' || req.query._debug === '1';
-    const ent = await getEntitlements(supabase, userId, { debug });
-    res.json({ ok:true, ...ent });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:String(e) });
+    const userId = req.query.user_id?.trim();
+    if (!userId) return res.json({ ok: true, ...defaults });
+
+    // attempt lookup; if not found, fall back
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('subscription_tier, plan_quota_monthly, plan_credits_used_month')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error || !profile) return res.json({ ok: true, ...defaults });
+
+    const tier = profile.subscription_tier || 'Free';
+    const quota = profile.plan_quota_monthly ?? (tier === 'Pro' ? 25 : tier === 'Casual' ? 5 : 2);
+    const used  = profile.plan_credits_used_month ?? 0;
+    const remaining = Math.max(0, quota - used);
+
+    return res.json({ ok: true, tier, quota, remaining, previewAllowed: tier !== 'Free' });
+  } catch {
+    return res.json({ ok: true, tier: 'Free', quota: 2, remaining: 2, previewAllowed: false });
   }
 });
 
