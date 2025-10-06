@@ -71,21 +71,27 @@ function resolveUserIdFrom(req) {
 }
 
 // Helper to get project by ID
-async function getProjectById(supabase, id) {
+async function getProjectById(id) {
   const { data, error } = await supabase.from('projects').select('*').eq('id', id).maybeSingle();
   if (error) throw error;
   return data || null;
 }
 
-// Normalize skill level
-function normSkill(x) { 
-  return (x || '').toString().toLowerCase() || 'intermediate'; 
+// Normalize helpers
+function norm(x, fallback = '') { 
+  return (x ?? fallback).toString().trim(); 
 }
 
-// Normalize budget
+function normSkill(x) { 
+  return (x || 'intermediate').toString().toLowerCase(); 
+}
+
 function normBudget(x) { 
   return (x || '$$').toString(); 
 }
+
+// Dev bypass constant
+const DEV_BYPASS = process.env.NODE_ENV !== 'production' && process.env.DEV_NO_QUOTA === '1';
 
 // Ensure there is an auth.users row; required before touching `profiles`
 async function ensureAuthUserExists(supabase, userId, email) {
@@ -116,63 +122,39 @@ const TIER_RULES = {
   pro:    { quota: 25, preview: true  },
 };
 
-async function getEntitlements(supabase, userId, opts = {}) {
-  const debug = !!(opts.debug);
-
-  // Read profile including subscription fields
-  let { data: prof, error: profErr } = await supabase
-    .from('profiles')
-    .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  // Auto-create if missing
-  if (!prof && profErr && profErr.code === 'PGRST116') {
-    const { data: newProf } = await supabase
+async function getEntitlements(userId) {
+  try {
+    const { data, error } = await supabase
       .from('profiles')
-      .insert({ user_id: userId, plan_tier: 'free' })
-      .select('plan_tier, subscription_tier, stripe_subscription_status, is_subscribed')
+      .select('subscription_tier, plan_tier')
+      .eq('user_id', userId)
       .maybeSingle();
-    prof = newProf;
-    profErr = null;
+    
+    if (error) throw error;
+    
+    const tier = data?.subscription_tier || data?.plan_tier || 'free';
+    const quota = tier === 'pro' ? 25 : tier === 'casual' ? 5 : (process.env.DEV_NO_QUOTA ? 999 : 2);
+    
+    // Count user's projects
+    const { count } = await supabase
+      .from('projects')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    const used = count || 0;
+    const remaining = Math.max(0, quota - used);
+    
+    return { 
+      tier, 
+      remaining, 
+      previewAllowed: tier === 'pro' || tier === 'casual'
+    };
+  } catch (e) {
+    if (DEV_BYPASS) {
+      console.warn('[ENTS] bypassing entitlements in dev', e?.message || e);
+      return { tier: 'free', remaining: 999, previewAllowed: false, devBypass: true };
+    }
+    throw e;
   }
-
-  if (profErr) {
-    const payload = { tier: 'free', quota: 2, previewAllowed: false, remaining: 0, error: String(profErr.message || profErr) };
-    return debug ? { ...payload, _meta: { source:'error', prof:null } } : payload;
-  }
-
-  const norm = v => (v ?? '').toString().trim().toLowerCase();
-  const planTier = norm(prof?.plan_tier || 'free');
-  const subTier  = norm(prof?.subscription_tier);
-  const subStat  = norm(prof?.stripe_subscription_status);
-  const isSub    = !!prof?.is_subscribed;
-
-  const subscriptionActive = isSub || subStat === 'active' || subStat === 'trialing';
-  const useSubTier = subscriptionActive && (subTier === 'pro' || subTier === 'casual');
-
-  let tier = useSubTier ? subTier : planTier;
-  if (!TIER_RULES[tier]) tier = 'free';
-
-  // Count user's projects
-  const { count } = await supabase
-    .from('projects')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId);
-  const used = count || 0;
-  const rules = TIER_RULES[tier];
-  const remaining = Math.max(0, rules.quota - used);
-
-  const payload = {
-    tier,
-    quota: rules.quota,
-    previewAllowed: !!rules.preview,
-    remaining,
-  };
-
-  return debug
-    ? { ...payload, _meta: { source: useSubTier ? 'subscription_tier' : 'plan_tier', planTier, subTier, subStat, isSub, used } }
-    : payload;
 }
 
 async function ensureProfile(supabase, userId) {
@@ -209,9 +191,9 @@ async function requirePreviewOrBuildQuota(req, res, next) {
 
     let ent;
     try {
-      ent = await getEntitlements(supabase, userId);
+      ent = await getEntitlements(userId);
     } catch (err) {
-      ent = { tier: 'free', quota: 2, previewAllowed: false, remaining: 2 };
+      ent = { tier: 'free', remaining: 2, previewAllowed: false };
     }
 
     req.entitlements = ent;
@@ -500,7 +482,7 @@ app.post('/api/billing/upgrade', async (req, res) => {
 // --- Helpers ---
 const picsum = seed => `https://picsum.photos/seed/${encodeURIComponent(seed)}/1200/800`;
 
-function norm(s='') { return String(s||'').toLowerCase(); }
+function normLower(s='') { return String(s||'').toLowerCase(); }
 
 function inferBudgetLabel(b) {
   const t = (b||'').trim();
@@ -511,7 +493,7 @@ function inferBudgetLabel(b) {
 }
 
 function inferDifficulty(skill) {
-  const s = norm(skill);
+  const s = normLower(skill);
   if (s.includes('begin')) return 'beginner';
   if (s.includes('inter')) return 'medium';
   if (s.includes('adv') || s.includes('expert') || s.includes('pro')) return 'advanced';
@@ -519,7 +501,7 @@ function inferDifficulty(skill) {
 }
 
 function inferStyle(desc) {
-  const d = norm(desc);
+  const d = normLower(desc);
   if (d.match(/\b(minimal|clean|simple)\b/)) return 'minimal';
   if (d.match(/\b(modern|contemporary)\b/)) return 'modern';
   if (d.match(/\b(rustic|farmhouse)\b/)) return 'rustic';
@@ -955,52 +937,29 @@ app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, re
 app.post('/api/projects/:id/build-without-preview', async (req, res) => {
   try {
     const { id } = req.params;
-    const user_id = resolveUserIdFrom(req);
-    const { prompt } = req.body || {};
+    const p = await getProjectById(id);
+    if (!p) return res.status(404).json({ ok: false, error: 'not_found' });
 
+    // Resolve user_id from request or project
+    const user_id = resolveUserIdFrom(req) || p.user_id;
+    const prompt = norm(req.body?.prompt, '');
+    
     if (!user_id || !prompt) {
-      console.log(`[POST /api/projects/:id/build-without-preview] missing user_id or prompt`);
       return res.status(422).json({ ok: false, error: 'invalid_payload' });
     }
 
-    // Check entitlements (with dev bypass)
-    let ent;
-    try {
-      ent = await getEntitlements(supabase, user_id);
-      
-      // Enforce quota if we have valid entitlements
-      if (ent.remaining <= 0) {
-        return res.status(403).json({ 
-          ok: false, 
-          error: 'quota_exhausted', 
-          remaining: ent.remaining,
-          tier: ent.tier 
-        });
-      }
-    } catch (entErr) {
-      // Dev bypass: if entitlements fail and we're not in production, allow one build
-      if (process.env.NODE_ENV !== 'production') {
-        console.log('[build-without-preview] Entitlements failed, dev bypass enabled:', entErr.message);
-        ent = { tier: 'free', remaining: 1 };
-      } else {
-        throw entErr;
-      }
-    }
-
-    // Get project details
-    const { data: project, error: pErr } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (pErr || !project) {
-      console.log(`[POST /api/projects/:id/build-without-preview] project not found: ${id}`);
-      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    const ents = await getEntitlements(user_id);
+    if (!DEV_BYPASS && ents.remaining <= 0) {
+      return res.status(403).json({ 
+        ok: false, 
+        error: 'quota_exhausted', 
+        tier: ents.tier, 
+        remaining: ents.remaining 
+      });
     }
 
     // Mark plan requested (idempotent - skip if already has plan)
-    if (!project.plan_json) {
+    if (!p.plan_json) {
       await supabase.from('projects')
         .update({ status: 'plan_requested' })
         .eq('id', id);
@@ -1011,7 +970,7 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
     res.json({ ok: true, id });
 
     // Background processing with provider selection (skip if already has plan)
-    if (!project.plan_json) {
+    if (!p.plan_json) {
       (async () => {
         try {
           let planData = null;
@@ -1021,9 +980,9 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
             try {
               console.log(`[Plan] Calling OpenAI for project ${id}`);
               planData = await callOpenAIGeneratePlan({
-                description: prompt || project.name || 'DIY project',
-                budget: project.budget || 'medium',
-                skill_level: project.skill_level || 'beginner'
+                description: prompt || p.name || 'DIY project',
+                budget: p.budget || 'medium',
+                skill_level: p.skill_level || 'beginner'
               });
               console.log(`[Plan] OpenAI success for ${id}`);
             } catch (openaiErr) {
@@ -1042,14 +1001,14 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
 
           // Generate stub plan if needed
           if (!planData) {
-            const projBudget = project.budget || 'medium';
-            const projSkill = project.skill_level || 'beginner';
+            const projBudget = p.budget || 'medium';
+            const projSkill = p.skill_level || 'beginner';
             const budgetMap = { low: '$', medium: '$$', high: '$$$' };
             const budgetLabel = budgetMap[projBudget] || '$$';
             
             planData = {
               summary: {
-                title: project.name || 'DIY Project',
+                title: p.name || 'DIY Project',
                 est_cost: budgetLabel,
                 est_time: projSkill === 'advanced' ? '8-12 hours' : projSkill === 'intermediate' ? '4-8 hours' : '2-4 hours',
                 difficulty: projSkill
@@ -1098,28 +1057,36 @@ app.post('/api/projects/:id/build-without-preview', async (req, res) => {
 app.post('/api/projects/:id/suggestions', async (req, res) => {
   try {
     const { id } = req.params;
-    const p = await getProjectById(supabase, id);
+    const p = await getProjectById(id);
     if (!p) return res.status(404).json({ ok: false, error: 'not_found' });
 
-    const body = req.body || {};
-    const desc = (body.desc || p.name || p.description || '').toString().trim();
-    const budget = normBudget(body.budget || p.budget);
-    const skill_level = normSkill(body.skill_level || body.skill || p.skill_level);
+    const b = req.body || {};
+    const desc = norm(b.desc || b.description || p.name || p.description, '');
+    const budget = normBudget(b.budget || p.budget);
+    const skill = normSkill(b.skill_level || b.skill || p.skill_level);
 
-    // Return deterministic starter tips
+    // You can later swap this stub with OpenAI. For now: always return 200.
     const suggestions = [
-      `Use materials that match the room (e.g., oak/walnut for warm tones).`,
-      `Locate wall studs and keep brackets aligned; 16" OC is typical.`,
-      `Pre-finish shelf parts before mounting to save cleanup.`,
-      `Label hardware in bags to speed up assembly.`,
-      `Keep lighting consistent (warm LED) to match the space.`,
+      'Match materials to the room palette (oak/walnut for warm tones).',
+      'Find studs and align brackets (16" OC typical).',
+      'Pre-finish shelf parts to save time.',
+      'Label hardware in small bags.',
+      'Keep lighting consistent (warm LED).'
     ];
-    const tags = [skill_level, budget].filter(Boolean);
+    const tags = [skill, budget].filter(Boolean);
 
-    return res.json({ ok: true, suggestions, tags });
+    return res.json({ ok: true, suggestions, tags, desc, budget, skill });
   } catch (e) {
     console.error('[SUGGESTIONS]', e);
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
+    // Still 200 with minimal fallback so the client never sees 422
+    return res.json({
+      ok: true,
+      suggestions: [
+        'Use sturdy anchors if no studs are available.',
+        'Dry-fit layout and mark level lines first.'
+      ],
+      tags: []
+    });
   }
 });
 

@@ -1,0 +1,104 @@
+Goal: (1) Make /api/projects/:id/suggestions never 422 by deriving missing fields from the project and returning fallback tips on any error. (2) Allow a development bypass for build-without-preview and return clear 403 JSON when quota is truly exceeded.
+
+Edit index.js (or the main server file):
+
+1) Helpers (place near top, after supabase client):
+   function norm(x, fallback=''){ return (x ?? fallback).toString().trim(); }
+   function normSkill(x){ return (x || 'intermediate').toString().toLowerCase(); }
+   function normBudget(x){ return (x || '$$').toString(); }
+   async function getProjectById(id){
+     const { data, error } = await supabase.from('projects')
+       .select('*').eq('id', id).maybeSingle();
+     if (error) throw error;
+     return data || null;
+   }
+   const DEV_BYPASS = process.env.NODE_ENV !== 'production' && process.env.DEV_NO_QUOTA === '1';
+
+2) PATCH /api/projects/:id/suggestions to NEVER 422:
+   app.post('/api/projects/:id/suggestions', async (req, res) => {
+     try {
+       const { id } = req.params;
+       const p = await getProjectById(id);
+       if (!p) return res.status(404).json({ ok:false, error:'not_found' });
+
+       const b = req.body || {};
+       const desc = norm(b.desc || b.description || p.name || p.description, '');
+       const budget = normBudget(b.budget || p.budget);
+       const skill = normSkill(b.skill_level || b.skill || p.skill_level);
+
+       // You can later swap this stub with OpenAI. For now: always return 200.
+       const suggestions = [
+         'Match materials to the room palette (oak/walnut for warm tones).',
+         'Find studs and align brackets (16" OC typical).',
+         'Pre-finish shelf parts to save time.',
+         'Label hardware in small bags.',
+         'Keep lighting consistent (warm LED).'
+       ];
+       const tags = [skill, budget].filter(Boolean);
+
+       return res.json({ ok:true, suggestions, tags, desc, budget, skill });
+     } catch (e) {
+       console.error('[SUGGESTIONS]', e);
+       // Still 200 with minimal fallback so the client never sees 422
+       return res.json({
+         ok:true,
+         suggestions:[
+           'Use sturdy anchors if no studs are available.',
+           'Dry-fit layout and mark level lines first.'
+         ],
+         tags:[]
+       });
+     }
+   });
+
+3) Factor entitlement check with dev bypass and clear 403:
+   async function getEntitlements(user_id){
+     try {
+       const { data, error } = await supabase
+         .from('profiles')
+         .select('subscription_tier, plan_quota_month')
+         .eq('user_id', user_id).maybeSingle();
+       if (error) throw error;
+       const tier = data?.subscription_tier || 'free';
+       const quota = tier === 'pro' ? 25 : (process.env.DEV_NO_QUOTA ? 999 : 2);
+       // If you don’t track usage yet, return full remaining in dev.
+       return { tier, remaining: quota, previewAllowed: tier==='pro' };
+     } catch (e) {
+       if (DEV_BYPASS) {
+         console.warn('[ENTS] bypassing entitlements in dev', e?.message || e);
+         return { tier:'free', remaining: 999, previewAllowed:false, devBypass:true };
+       }
+       throw e;
+     }
+   }
+
+4) PATCH POST /api/projects/:id/build-without-preview:
+   - Get the project by id to read its user_id when body.user_id is missing.
+   - Call getEntitlements(user_id).
+   - If remaining <= 0 and !DEV_BYPASS → return 403 { ok:false, error:'quota_exhausted', tier, remaining }.
+   - On success, ALWAYS return 200 { ok:true, id }.
+
+   app.post('/api/projects/:id/build-without-preview', async (req, res) => {
+     try {
+       const { id } = req.params;
+       const p = await getProjectById(id);
+       if (!p) return res.status(404).json({ ok:false, error:'not_found' });
+
+       const user_id = norm(req.body?.user_id || p.user_id);
+       const ents = await getEntitlements(user_id);
+       if (!DEV_BYPASS && ents.remaining <= 0) {
+         return res.status(403).json({ ok:false, error:'quota_exhausted', tier:ents.tier, remaining:ents.remaining });
+       }
+
+       // …existing plan build logic…
+       // Make sure success path ends with:
+       return res.json({ ok:true, id });
+     } catch (e) {
+       console.error('[BUILD_NO_PREVIEW]', e);
+       return res.status(500).json({ ok:false, error:String(e.message || e) });
+     }
+   });
+
+5) Set env:
+   - Add DEV_NO_QUOTA=1 in your webhooks environment for development.
+   - Republish webhooks after changes.
