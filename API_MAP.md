@@ -1,0 +1,710 @@
+# Webhooks API
+
+**FRAMEWORK:** Express.js 5.x  
+**BASE_URL:** _[To be filled with deployed URL]_
+
+---
+
+## Endpoints
+
+### GET /health
+- **Handler file:** `index.js:306`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true, status: "healthy", suggestions: "stub|openai", preview: "stub|decor8", plan: "stub|openai" }`
+- **Response (errors):** -
+- **Side effects:** none
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/health
+```
+
+---
+
+### GET /
+- **Handler file:** `index.js:313`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { message: "Server is running", status: "ready", base: "v1" }`
+- **Response (errors):** -
+- **Side effects:** none
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/
+```
+
+---
+
+### GET /me/entitlements/:userId
+- **Handler file:** `index.js:321`
+- **Auth:** none (service-level)
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `userId` (UUID string)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, tier: "Free|Casual|Pro", quota: number, remaining: number, previewAllowed: boolean }`
+- **Response (errors):** Always returns 200 with safe defaults
+- **Side effects:** Reads from `profiles` table
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/me/entitlements/550e8400-e29b-41d4-a716-446655440001
+```
+
+---
+
+### GET /api/me/entitlements/:userId
+- **Handler file:** `index.js:347`
+- **Auth:** none (service-level)
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `userId` (UUID string)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, tier: "Free|Casual|Pro", quota: number, remaining: number, previewAllowed: boolean }`
+- **Response (errors):** Always returns 200 with safe defaults
+- **Side effects:** Reads from `profiles` table
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/api/me/entitlements/550e8400-e29b-41d4-a716-446655440001
+```
+
+---
+
+### GET /me/entitlements
+- **Handler file:** `index.js:374`
+- **Auth:** none (service-level)
+- **Request headers:** -
+- **Query params:** `user_id` (UUID string, required)
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true, tier: "Free|Casual|Pro", quota: number, remaining: number, previewAllowed: boolean }`
+- **Response (errors):** Always returns 200 with safe defaults
+- **Side effects:** Reads from `profiles` table
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl 'https://your-api.com/me/entitlements?user_id=550e8400-e29b-41d4-a716-446655440001'
+```
+
+---
+
+### POST /api/billing/checkout
+- **Handler file:** `index.js:402`
+- **Auth:** none (uses Stripe)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "tier": "casual|pro",
+  "user_id": "uuid-string"
+}
+```
+- **Response (success):** `200 { ok: true, url: "stripe-checkout-session-url" }`
+- **Response (errors):** 
+  - `404 { ok: false, error: "unknown_tier" }` - Invalid tier
+  - `500 { ok: false, error: "missing_price_id" }` - Price ID not configured
+  - `500 { ok: false, error: "error_message" }` - Stripe error
+- **Side effects:** Creates Stripe checkout session
+- **Logs/phrases:** `[billing] checkout created`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/billing/checkout \
+  -H 'Content-Type: application/json' \
+  -d '{"tier":"casual","user_id":"550e8400-e29b-41d4-a716-446655440001"}'
+```
+
+---
+
+### POST /api/billing/portal
+- **Handler file:** `index.js:440`
+- **Auth:** none (uses Stripe)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "user_id": "uuid-string",
+  "customer_id": "stripe-customer-id-optional"
+}
+```
+- **Response (success):** `200 { ok: true, url: "stripe-portal-url" }`
+- **Response (errors):**
+  - `501 { ok: false, error: "no_customer" }` - No customer ID found
+  - `501 { ok: false, error: "portal_not_configured" }` - Stripe portal disabled
+  - `501 { ok: false, error: "invalid_customer" }` - Customer doesn't exist
+  - `501 { ok: false, error: "portal_unavailable" }` - Other Stripe error
+  - `500 { ok: false, error: "server_error" }` - Server error
+- **Side effects:** Reads from `profiles` table, creates Stripe billing portal session
+- **Logs/phrases:** `[billing] portal session created`, `[billing] portal: no customer id`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/billing/portal \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"550e8400-e29b-41d4-a716-446655440001"}'
+```
+
+---
+
+### POST /api/billing/upgrade
+- **Handler file:** `index.js:494`
+- **Auth:** none (dev stub)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "tier": "free|casual|pro",
+  "user_id": "uuid-string"
+}
+```
+- **Response (success):** `200 { ok: true, tier: "free|casual|pro" }`
+- **Response (errors):**
+  - `400 { ok: false, error: "missing_user_id" }` - No user_id
+  - `404 { ok: false, error: "unknown_tier" }` - Invalid tier
+  - `500 { ok: false, error: "error_message" }` - Database error
+- **Side effects:** Upserts `profiles` table (updates plan_tier)
+- **Logs/phrases:** `[billing] upgrade`, `[ERROR] Upgrade failed`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/billing/upgrade \
+  -H 'Content-Type: application/json' \
+  -d '{"tier":"pro","user_id":"550e8400-e29b-41d4-a716-446655440001"}'
+```
+
+---
+
+### GET /api/projects
+- **Handler file:** `index.js:695`
+- **Auth:** none (user_id via query)
+- **Request headers:** -
+- **Query params:** `user_id` (UUID, defaults to DEV_USER)
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true, items: [...projects] }`
+  - Project shape: `{ id, name, status, input_image_url, preview_url }`
+- **Response (errors):** `500 { ok: false, error: "error_message" }`
+- **Side effects:** Reads from `projects` table
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl 'https://your-api.com/api/projects?user_id=550e8400-e29b-41d4-a716-446655440001'
+```
+
+---
+
+### GET /api/projects/:id
+- **Handler file:** `index.js:711`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `id` (UUID)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, project: {...} }` (full project object)
+- **Response (errors):**
+  - `404 { ok: false, error: "not_found" }` - Project not found
+  - `500 { ok: false, error: "error_message" }` - Database error
+- **Side effects:** Reads from `projects` table
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001
+```
+
+---
+
+### POST /api/projects
+- **Handler file:** `index.js:729`
+- **Auth:** none (requires user_id in body)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "user_id": "uuid-string-required",
+  "name": "Project name (min 10 chars)",
+  "budget": "$|$$|$$$",
+  "skill_level": "beginner|intermediate|advanced"
+}
+```
+- **Response (success):** `200 { ok: true, item: { id: "uuid", status: "draft" } }`
+- **Response (errors):**
+  - `400 { ok: false, error: "user_id required" }` - Missing user_id
+  - `422 { ok: false, error: "invalid_name" }` - Name too short
+  - `422 { ok: false, error: "invalid_budget" }` - Missing budget
+  - `422 { ok: false, error: "invalid_skill_level" }` - Missing skill
+  - `422 { ok: false, error: "insert_failed" }` - Database insert failed
+- **Side effects:** Upserts `profiles` table, inserts into `projects` table
+- **Logs/phrases:** `[POST /api/projects] user_id=..., project_id=...`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id":"550e8400-e29b-41d4-a716-446655440001",
+    "name":"Build floating shelf",
+    "budget":"$$",
+    "skill_level":"intermediate"
+  }'
+```
+
+---
+
+### POST /api/projects/:id/image
+- **Handler file:** `index.js:780`
+- **Auth:** none
+- **Request headers:** `Content-Type: multipart/form-data` OR `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** 
+  - Multipart: File field (name: `file` or `image`)
+  - JSON: `{ "direct_url": "https://..." }`
+- **Response (success):** `200 { ok: true }`
+- **Response (errors):**
+  - `400 { ok: false, error: "invalid_direct_url_must_be_http_or_https" }` - Bad URL
+  - `400 { ok: false, error: "invalid_file_type_must_be_image" }` - Non-image file
+  - `400 { ok: false, error: "missing_file_or_direct_url" }` - No file/URL provided
+  - `500 { ok: false, error: "error_message" }` - Upload/database error
+- **Side effects:** Uploads to Supabase Storage, updates `projects.input_image_url`
+- **Logs/phrases:** `[WARN] Supabase upload failed, using stub URL`, `[ERROR] Image upload exception`
+
+**Sample (multipart):**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/image \
+  -F 'file=@room.jpg'
+```
+
+**Sample (direct URL):**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/image \
+  -H 'Content-Type: application/json' \
+  -d '{"direct_url":"https://example.com/room.jpg"}'
+```
+
+---
+
+### POST /api/projects/:id/preview
+- **Handler file:** `index.js:874`
+- **Auth:** Middleware `requirePreviewOrBuildQuota` (checks entitlements)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** `user_id` (optional, for quota check)
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):**
+```json
+{
+  "room_type": "livingroom|bedroom|kitchen|etc",
+  "design_style": "modern|minimalist|rustic|etc"
+}
+```
+- **Response (success):** `200 { ok: true }` (async processing starts)
+- **Response (errors):**
+  - `403 { ok: false, error: "no_user" }` - No user_id found
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `422 { ok: false, error: "missing_input_image_url" }` - No image uploaded
+  - `409 { ok: false, error: "preview_already_used" }` - Already has preview
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** 
+  - Updates `projects.status` to `preview_requested` → `preview_ready` (or `preview_error`)
+  - Calls Decor8 API if PREVIEW_PROVIDER=decor8, else stub (5s delay)
+  - Updates `projects.preview_url`
+- **Logs/phrases:** `[Preview] Calling Decor8 for project`, `[Preview] Decor8 success`, `[Preview] Completed for`
+
+**Sample:**
+```bash
+curl -X POST 'https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/preview?user_id=550e8400-e29b-41d4-a716-446655440001' \
+  -H 'Content-Type: application/json' \
+  -d '{"room_type":"livingroom","design_style":"modern"}'
+```
+
+---
+
+### POST /api/projects/:id/build-without-preview
+- **Handler file:** `index.js:966`
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`, `x-user-id` (optional)
+- **Query params:** `user_id` (optional)
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):**
+```json
+{
+  "project_id": "uuid-optional",
+  "id": "uuid-optional",
+  "user_id": "uuid-optional"
+}
+```
+- **Response (success):** `202 { ok: true, project_id: "uuid", accepted: true, user_id: "uuid|null" }`
+- **Response (errors):**
+  - `400 { ok: false, error: "missing_project_id" }` - No project ID
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Updates `projects.status` to `ready`, clears `preview_url`
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/build-without-preview \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+---
+
+### POST /api/projects/:id/suggestions
+- **Handler file:** `index.js:1013`
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):**
+```json
+{
+  "desc": "project description (optional)",
+  "description": "project description (optional)",
+  "budget": "$|$$|$$$ (optional)",
+  "skill_level": "beginner|intermediate|advanced (optional)"
+}
+```
+- **Response (success):** `200 { ok: true, suggestions: ["tip1", "tip2"...], tags: ["skill", "budget"], desc: "...", budget: "...", skill: "..." }`
+- **Response (errors):** Always returns 200 with fallback suggestions
+- **Side effects:** Reads from `projects` table
+- **Logs/phrases:** `[SUGGESTIONS]`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/suggestions \
+  -H 'Content-Type: application/json' \
+  -d '{"desc":"Build floating shelf","budget":"$$","skill_level":"intermediate"}'
+```
+
+---
+
+### POST /api/projects/:id/suggestions-smart
+- **Handler file:** `index.js:1050`
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** - (reads from project data)
+- **Response (success):** `200 { ok: true, suggestions: [{ text: "...", tag: "clarity|context|materials|..." }] }` (max 6)
+- **Response (errors):**
+  - `400 { ok: false, error: "missing_project_id" }` - No project ID
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Reads from `projects` table (goal, name, budget, skill_level, input_image_url)
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/suggestions-smart \
+  -H 'Content-Type: application/json'
+```
+
+---
+
+### GET /api/projects/:id/plan
+- **Handler file:** `index.js:1114`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, plan_text: "markdown-formatted-plan" }`
+- **Response (errors):**
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `409 { ok: false, error: "plan_not_ready", status: "current_status" }` - Plan not ready
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Reads from `projects` table, formats `plan_json` to markdown
+- **Logs/phrases:** `[ERROR] GET plan database error`, `[ERROR] GET plan exception`
+
+**Sample:**
+```bash
+curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/plan
+```
+
+---
+
+### DELETE /api/projects/:id
+- **Handler file:** `index.js:1193`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { ok: true }`
+- **Response (errors):** `500 { ok: false, error: "error_message" }`
+- **Side effects:** Deletes from `projects` table
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl -X DELETE https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001
+```
+
+---
+
+### GET /api/projects/force-ready-all
+- **Handler file:** `index.js:1208`
+- **Auth:** none (dev utility)
+- **Request headers:** -
+- **Query params:** `user_id` (UUID, optional)
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true }`
+- **Response (errors):** `500 { ok: false, error: "error_message" }`
+- **Side effects:** Updates all `preview_requested` projects to `preview_ready` with stub image
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl 'https://your-api.com/api/projects/force-ready-all?user_id=550e8400-e29b-41d4-a716-446655440001'
+```
+
+---
+
+### GET /api/projects/:id/force-ready
+- **Handler file:** `index.js:1224`
+- **Auth:** none (dev utility)
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, id: "uuid" }`
+- **Response (errors):** `500 { ok: false, error: "error_message" }`
+- **Side effects:** Updates project to `preview_ready` with stub image
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/force-ready
+```
+
+---
+
+### GET /billing/success
+- **Handler file:** `index.js:1239`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200` HTML page with success message
+- **Response (errors):** -
+- **Side effects:** none
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/billing/success
+```
+
+---
+
+### GET /billing/cancel
+- **Handler file:** `index.js:1247`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200` HTML page with cancel message
+- **Response (errors):** -
+- **Side effects:** none
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/billing/cancel
+```
+
+---
+
+### GET /billing/portal-return
+- **Handler file:** `index.js:1255`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200` HTML page with portal return message
+- **Response (errors):** -
+- **Side effects:** none
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl https://your-api.com/billing/portal-return
+```
+
+---
+
+## Environment Variables
+
+| Variable | Purpose | First Used | Default/Required |
+|----------|---------|------------|------------------|
+| `SUPABASE_URL` | Supabase project URL | `index.js:20` | **Required** (exits in prod) |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key (admin access) | `index.js:21` | **Required** (exits in prod) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Alias for SUPABASE_SERVICE_KEY | `index.js:21` | Fallback |
+| `EXPO_PUBLIC_UPLOADS_BUCKET` | Supabase storage bucket name | `index.js:36` | Default: `"uploads"` |
+| `TEST_USER_ID` | Dev/test user UUID | `index.js:37` | Optional |
+| `TEST_USER_EMAIL` | Dev/test user email | `index.js:38` | Default: `dev+test@diygenieapp.com` |
+| `STRIPE_SECRET_KEY` | Stripe API secret key | `index.js:42` | Optional (billing disabled if missing) |
+| `DEV_NO_QUOTA` | Bypass quota limits in dev (set to "1") | `index.js:94` | Optional |
+| `NODE_ENV` | Environment mode | `index.js:27` | Default: `development` |
+| `PREVIEW_PROVIDER` | Preview generation provider | `index.js:208` | Default: `"stub"` (`"decor8"` for real) |
+| `PLAN_PROVIDER` | Plan generation provider | `index.js:209` | Default: `"stub"` (`"openai"` for real) |
+| `SUGGESTIONS_PROVIDER` | Suggestions provider | `index.js:210` | Default: `"stub"` (`"openai"` for real) |
+| `SUGGESTIONS_OPENAI_MODEL` | OpenAI model for suggestions | `index.js:211` | Default: `"gpt-4o-mini"` |
+| `SUGGESTIONS_OPENAI_BASE` | OpenAI API base URL | `index.js:212` | Default: `"https://api.openai.com/v1"` |
+| `DECOR8_BASE_URL` | Decor8 API base URL | `index.js:215` | Default: `"https://api.decor8.ai"` |
+| `DECOR8_API_KEY` | Decor8 API key | `index.js:216` | Required if PREVIEW_PROVIDER=decor8 |
+| `OPENAI_API_KEY` | OpenAI API key | `index.js:251` | Required if PLAN_PROVIDER=openai |
+| `PRO_PRICE_ID` | Stripe price ID for Pro tier | `index.js:410` | Required for Pro checkout |
+| `CASUAL_PRICE_ID` | Stripe price ID for Casual tier | `index.js:410` | Required for Casual checkout |
+| `SUCCESS_URL` | Stripe checkout success redirect | `index.js:417` | Default: `{base}/billing/success` |
+| `CANCEL_URL` | Stripe checkout cancel redirect | `index.js:418` | Default: `{base}/billing/cancel` |
+| `PORTAL_RETURN_URL` | Stripe portal return URL | `index.js:462` | Default: `{base}/billing/portal-return` |
+| `PORT` | Server port | `index.js:1264` | Default: `5000` |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signature secret | - | Required for webhooks (not in this file) |
+
+---
+
+## External Calls
+
+### Supabase (@supabase/supabase-js SDK)
+- **Where:** Throughout `index.js`
+- **Operations:**
+  - Database queries: `supabase.from('profiles|projects').select(...)` 
+  - Auth admin: `supabase.auth.admin.getUserById(...)`, `supabase.auth.admin.createUser(...)`
+  - Storage uploads: `supabase.storage.from(bucket).upload(path, buffer)`
+  - Storage public URLs: `supabase.storage.from(bucket).getPublicUrl(path)`
+- **Tables accessed:** `profiles`, `projects`
+- **Auth:** Service role key (bypasses RLS)
+
+### Stripe (stripe SDK)
+- **Where:** `index.js:420, 465`
+- **Operations:**
+  - Create checkout session: `stripe.checkout.sessions.create({ mode: 'subscription', line_items: [...], ... })`
+  - Create billing portal session: `stripe.billingPortal.sessions.create({ customer, return_url })`
+- **Request shape:**
+  - Checkout: `{ mode, line_items, success_url, cancel_url, metadata, subscription_data }`
+  - Portal: `{ customer, return_url }`
+- **Auth:** `STRIPE_SECRET_KEY`
+
+### Decor8 AI (fetch)
+- **Where:** `index.js:227`
+- **Endpoint:** `POST {DECOR8_BASE_URL}/generate_designs_for_room`
+- **Request:**
+  ```json
+  {
+    "input_image_url": "https://...",
+    "room_type": "livingroom",
+    "design_style": "minimalist",
+    "num_images": 1
+  }
+  ```
+- **Headers:** `Authorization: Bearer {DECOR8_API_KEY}`, `Content-Type: application/json`
+- **Response:** `{ error: "", message: "...", info: { images: ["url1", ...] } }`
+- **Auth:** Bearer token (`DECOR8_API_KEY`)
+
+### OpenAI (fetch)
+- **Where:** `index.js:272` (plan generation), `index.js:636` (suggestions)
+- **Endpoint:** `POST https://api.openai.com/v1/chat/completions`
+- **Request (Plan):**
+  ```json
+  {
+    "model": "gpt-4o-mini",
+    "messages": [
+      { "role": "system", "content": "You are a DIY project planning assistant..." },
+      { "role": "user", "content": "Generate plan for..." }
+    ],
+    "temperature": 0.7,
+    "response_format": { "type": "json_object" }
+  }
+  ```
+- **Request (Suggestions):**
+  ```json
+  {
+    "model": "gpt-4o-mini",
+    "messages": [
+      { "role": "system", "content": "You are an interior design assistant..." },
+      { "role": "user", "content": "Project: ...\nBudget: ...\nSkill: ..." }
+    ],
+    "temperature": 0.2,
+    "max_tokens": 350,
+    "response_format": { "type": "json_object" }
+  }
+  ```
+- **Headers:** `Authorization: Bearer {OPENAI_API_KEY}`, `Content-Type: application/json`
+- **Response:** `{ choices: [{ message: { content: "{json}" } }] }`
+- **Auth:** Bearer token (`OPENAI_API_KEY`)
+
+---
+
+## Middleware
+
+### CORS
+- **File:** `index.js:8`
+- **Config:** Allows all origins, methods: GET, POST, PATCH, OPTIONS
+
+### Request Logging
+- **File:** `index.js:12-15`
+- **Logs:** `[REQ] METHOD /path` for every request
+
+### JSON Body Parser
+- **File:** `index.js:9`
+- **Config:** Express built-in JSON parser
+
+### Multer (File Upload)
+- **File:** `index.js:17`
+- **Config:** Memory storage (buffers in RAM)
+- **Used on:** `POST /api/projects/:id/image`
+
+### requirePreviewOrBuildQuota
+- **File:** `index.js:186-205`
+- **Applied to:** `POST /api/projects/:id/preview`
+- **Function:** Checks user entitlements, verifies quota/tier
+- **Sets:** `req.user_id`, `req.entitlements`
+
+---
+
+## Summary
+
+**Total Endpoints:** 23
+
+**By Method:**
+- GET: 13
+- POST: 9
+- DELETE: 1
+
+**By Category:**
+- Health/Status: 2
+- Entitlements: 3
+- Billing: 3
+- Projects (CRUD): 4
+- Project Actions: 6
+- Utilities: 2
+- Redirects: 3
