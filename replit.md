@@ -26,9 +26,10 @@ Non-blocking asynchronous processing for resource-intensive operations:
 
 ### Authentication & Authorization
 - Service-level authentication using Supabase service role key (bypasses RLS)
-- User identification via `user_id` parameter in requests
-- Dev user constant: `00000000-0000-0000-0000-000000000001`
+- **User identification**: `user_id` required in request body (must be valid UUID)
+- Profile auto-created via upsert on first project creation (default tier: 'free')
 - No JWT validation at API layer (handled by client/Supabase)
+- Projects and builds are saved with the actual user's ID from the app
 
 ### Subscription Tiers & Entitlements
 Three-tier system with quota-based restrictions:

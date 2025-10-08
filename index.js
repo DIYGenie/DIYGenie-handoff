@@ -728,48 +728,34 @@ app.get('/api/projects/:id', async (req, res) => {
 // NEVER gated - project creation is always allowed regardless of tier
 app.post('/api/projects', async (req, res) => {
   try {
-    let { name, budget, skill, skill_level } = req.body || {};
-    const userId = resolveUserIdFrom(req);
+    const { user_id, name, budget, skill, skill_level } = req.body || {};
+
+    // Require user_id from the app
+    if (!user_id) {
+      return res.status(400).json({ ok: false, error: 'user_id required' });
+    }
 
     // Map skill → skill_level if present
     const skillLevel = skill_level || skill;
 
     // Basic validation
-    if (!userId) return res.status(422).json({ ok: false, error: 'invalid_user' });
     if (!name || String(name).trim().length < 10) return res.status(422).json({ ok: false, error: 'invalid_name' });
     if (!budget) return res.status(422).json({ ok: false, error: 'invalid_budget' });
     if (!skillLevel) return res.status(422).json({ ok: false, error: 'invalid_skill_level' });
 
-    // Ensure dev auth user exists (only needed for TEST_USER_ID path)
-    if (userId === TEST_USER_ID) {
-      const okUser = await ensureAuthUserExists(supabase, userId, TEST_USER_EMAIL);
-      if (!okUser.ok) return res.status(422).json({ ok: false, error: 'auth_user_missing' });
-    }
-
-    // Ensure profile exists (FK will now succeed)
-    let { data: prof, error: profErr } = await supabase
+    // Upsert profile to avoid foreign key errors
+    await supabase
       .from('profiles')
-      .select('plan_tier')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (!prof && profErr && profErr.code === 'PGRST116') {
-      const { data: newProf, error: insertErr } = await supabase
-        .from('profiles')
-        .insert({ user_id: userId, plan_tier: 'free' })
-        .select('plan_tier')
-        .maybeSingle();
-      if (insertErr) return res.status(422).json({ ok: false, error: 'profile_insert_failed' });
-      prof = newProf;
-    } else if (profErr && !prof) {
-      return res.status(422).json({ ok: false, error: 'profile_lookup_failed' });
-    }
+      .upsert(
+        { user_id, plan_tier: 'free' },
+        { onConflict: 'user_id', ignoreDuplicates: true }
+      );
 
     // Create project
     const { data: inserted, error: projectErr } = await supabase
       .from('projects')
       .insert({
-        user_id: userId,
+        user_id,
         name: String(name).trim(),
         budget,
         status: 'draft'
@@ -782,7 +768,7 @@ app.post('/api/projects', async (req, res) => {
       return res.status(422).json({ ok: false, error: 'insert_failed' });
     }
 
-    console.log(`[POST /api/projects] user_id=${userId}, project_id=${inserted.id}`);
+    console.log(`[POST /api/projects] user_id=${user_id}, project_id=${inserted.id}`);
     return res.json({ ok: true, item: inserted });
   } catch (e) {
     console.log(`[POST /api/projects] error: ${e.message}`);
