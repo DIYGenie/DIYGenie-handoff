@@ -1128,12 +1128,7 @@ app.get('/api/projects/:id/plan', async (req, res) => {
       return res.status(404).json({ ok:false, error:'project_not_found' });
     }
 
-    // Check if plan is ready
-    if (project.status !== 'plan_ready') {
-      return res.status(409).json({ ok:false, error:'plan_not_ready', status: project.status });
-    }
-
-    // Generate plan_text from plan_json
+    // Generate plan_text from plan_json (allow access even if not plan_ready)
     const plan_json = project.plan_json || {};
     const summary = plan_json.summary || {};
     const steps = plan_json.steps || [];
@@ -1182,10 +1177,65 @@ app.get('/api/projects/:id/plan', async (req, res) => {
       });
     }
 
-    return res.json({ ok:true, plan_text });
+    return res.json({ ok:true, plan_text, status: project.status });
   } catch (e) {
     console.log('[ERROR] GET plan exception:', e.message);
     return res.status(500).json({ ok:false, error: String(e.message || e) });
+  }
+});
+
+// --- Progress tracking endpoints ---
+// GET progress for a project
+app.get('/api/projects/:id/progress', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('projects')
+      .select('completed_steps, current_step_index')
+      .eq('id', id)
+      .maybeSingle();
+    
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    res.json({
+      ok: true,
+      completed_steps: data?.completed_steps || [],
+      current_step_index: data?.current_step_index || 0
+    });
+  } catch (err) {
+    console.error('[progress GET error]', err);
+    res.status(500).json({ ok: false, error: 'Failed to fetch progress' });
+  }
+});
+
+// POST progress for a project
+app.post('/api/projects/:id/progress', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { completed_steps, current_step_index } = req.body;
+    
+    const { data, error } = await supabase
+      .from('projects')
+      .update({ 
+        completed_steps,
+        current_step_index 
+      })
+      .eq('id', id)
+      .select()
+      .maybeSingle();
+    
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    res.json({ ok: true, ...data });
+  } catch (err) {
+    console.error('[progress POST error]', err);
+    res.status(500).json({ ok: false, error: 'Failed to update progress' });
   }
 });
 
