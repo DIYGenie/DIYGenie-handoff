@@ -1279,6 +1279,96 @@ app.post('/api/projects/:id/progress', async (req, res) => {
   }
 });
 
+// --- Measurement endpoints ---
+// POST /api/projects/:projectId/scans/:scanId/measure
+app.post('/api/projects/:projectId/scans/:scanId/measure', async (req, res) => {
+  try {
+    const { projectId, scanId } = req.params;
+    const { roi } = req.body;
+    
+    console.log('[measure web] start', { projectId, scanId });
+    
+    // Verify scan belongs to the specified project
+    const { data: scan, error: scanError } = await supabase
+      .from('room_scans')
+      .select('id, project_id')
+      .eq('id', scanId)
+      .eq('project_id', projectId)
+      .maybeSingle();
+    
+    if (scanError) throw scanError;
+    if (!scan) {
+      return res.status(404).json({ ok: false, error: 'scan_not_found' });
+    }
+    
+    // Prepare update data
+    const updateData = {
+      measure_status: 'done',
+      measure_result: {
+        px_per_in: 15.0,
+        width_in: 48,
+        height_in: 30
+      }
+    };
+    
+    // Include roi if provided
+    if (roi !== undefined) {
+      updateData.roi = roi;
+    }
+    
+    // Update scan with measurement result
+    const { error: updateError } = await supabase
+      .from('room_scans')
+      .update(updateData)
+      .eq('id', scanId);
+    
+    if (updateError) throw updateError;
+    
+    console.log('[measure web] update complete', { scanId, status: 'done' });
+    
+    res.json({ ok: true, status: 'done' });
+  } catch (e) {
+    console.error('[measure web] error:', e.message);
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// GET /api/projects/:projectId/scans/:scanId/measure/status
+app.get('/api/projects/:projectId/scans/:scanId/measure/status', async (req, res) => {
+  try {
+    const { projectId, scanId } = req.params;
+    
+    console.log('[measure web] status check', { projectId, scanId });
+    
+    // Verify scan belongs to project and get measurement data
+    const { data: scan, error } = await supabase
+      .from('room_scans')
+      .select('measure_status, measure_result')
+      .eq('id', scanId)
+      .eq('project_id', projectId)
+      .maybeSingle();
+    
+    if (error) throw error;
+    if (!scan) {
+      return res.status(404).json({ ok: false, error: 'scan_not_found' });
+    }
+    
+    // Check if measurement is ready
+    if (!scan.measure_status || !scan.measure_result) {
+      return res.status(409).json({ ok: false, error: 'not_ready' });
+    }
+    
+    res.json({ 
+      ok: true, 
+      status: scan.measure_status, 
+      result: scan.measure_result 
+    });
+  } catch (e) {
+    console.error('[measure web] status error:', e.message);
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // --- Projects: DELETE ---
 app.delete('/api/projects/:id', async (req, res) => {
   try {

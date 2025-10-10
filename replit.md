@@ -64,6 +64,8 @@ Entitlement enforcement:
 - `input_image_url` (text, nullable)
 - `preview_url` (text, nullable)
 - `plan_json` (jsonb, nullable)
+- `completed_steps` (integer array, for progress tracking)
+- `current_step_index` (integer, for progress tracking)
 
 **Profiles Table** (user subscription data):
 - `user_id` (UUID, primary key)
@@ -72,6 +74,13 @@ Entitlement enforcement:
 - `stripe_subscription_id` (text)
 - `stripe_subscription_status` (text)
 - `current_period_end` (timestamp)
+
+**Room Scans Table** (AR scan data):
+- `id` (UUID, primary key)
+- `project_id` (UUID, foreign key to projects)
+- `roi` (jsonb, nullable - region of interest)
+- `measure_status` (text, nullable - measurement processing status)
+- `measure_result` (jsonb, nullable - measurement output)
 
 ### Feature Flags & Provider Pattern
 Pluggable architecture for AI services with stub fallbacks:
@@ -161,3 +170,18 @@ Transitions triggered by explicit API calls, not automatic
 - `cors` (^2.8.5) - CORS middleware
 - `@stripe/stripe-js` (^7.9.0) - Stripe frontend utilities
 - `@stripe/react-stripe-js` (^4.0.2) - Stripe React components
+
+## Recent Updates
+
+### October 10, 2025
+**Measurement Endpoints for AR Scans**
+- Added `POST /api/projects/:projectId/scans/:scanId/measure` - Trigger measurement with optional ROI
+- Added `GET /api/projects/:projectId/scans/:scanId/measure/status` - Check measurement status
+- Stub implementation returns immediate result: `{px_per_in: 15.0, width_in: 48, height_in: 30}`
+- Auth: Verifies scan belongs to project via room_scans.project_id
+- Migration: `migrations/add_measurement_columns.sql` adds measure_status and measure_result to room_scans
+- Test: `tests/measure.test.sh` for endpoint validation
+
+**Plan Management Enhancement**
+- Added `POST /api/projects/:id/plan` for updating project plans with structured JSON
+- Modified `GET /api/projects/:id/plan` to include status in response (no longer 409 blocks)

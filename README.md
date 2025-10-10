@@ -62,6 +62,19 @@ Both preview and plan endpoints use **non-blocking async timers** to simulate re
 
 This prevents UI spinners from blocking indefinitely while maintaining realistic async behavior.
 
+## Database Migrations
+
+### Required Migrations
+
+Run these SQL migrations in your Supabase SQL Editor to enable all features:
+
+1. **Progress Tracking** (`migrations/add_progress_tracking.sql`)
+   - Adds `completed_steps` and `current_step_index` to projects table
+   
+2. **Measurements** (`migrations/add_measurement_columns.sql`)
+   - Adds `measure_status` and `measure_result` to room_scans table
+   - Required for AR scan measurement endpoints
+
 ## Testing
 
 Run automated app test (no manual IDs required):

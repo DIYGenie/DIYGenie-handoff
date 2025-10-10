@@ -1,0 +1,124 @@
+Context: After saving an AR scan we want a measurement job to run on the server and return an overlay image of dimensions/lines. We’ll trigger a webhook, poll its status, and render the overlay on ProjectDetails. No schema changes required.
+
+Edits:
+1) app/lib/api.ts
+   - Add helpers to call webhooks and poll.
+   - Add typed response for measurement status.
+   - Code:
+```ts
+// --- add near other API helpers ---
+export type MeasureStart = { ok: true; scan_id: string; job_id: string };
+export type MeasureStatus =
+  | { ok: true; ready: false }
+  | { ok: true; ready: true; overlay_url: string; image_url?: string }
+  | { ok: false; error: string };
+
+export async function requestScanMeasurement(projectId: string, scanId: string): Promise<MeasureStart> {
+  const url = `/api/projects/${projectId}/scans/${scanId}/measure`;
+  const res = await api(url, { method: 'POST' });
+  if (!res.ok) throw new Error(`[measure] start failed ${res.status}`);
+  return (await res.json()) as MeasureStart;
+}
+
+export async function pollScanMeasurement(projectId: string, scanId: string, { tries = 30, intervalMs = 2000 } = {}) {
+  const url = `/api/projects/${projectId}/scans/${scanId}/measure/status`;
+  for (let i = 0; i < tries; i++) {
+    const res = await api(url, { method: 'GET' });
+    const body = (await res.json()) as MeasureStatus;
+    if (!body.ok) throw new Error(`[measure] status error: ${'error' in body ? body.error : 'unknown'}`);
+    if (body.ready) return body; // {overlay_url, image_url?}
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error('[measure] timeout');
+}
+app/lib/scanEvents.ts
+
+After saveArScan, optionally kick off measurement (non-blocking) and return the scan id; we’ll let the details screen fetch/poll.
+
+Code (append new export):
+
+ts
+Copy code
+import { requestScanMeasurement } from './api';
+
+export async function startMeasurementJob(projectId: string, scanId: string) {
+  try {
+    console.log('[measure] start', { projectId, scanId });
+    await requestScanMeasurement(projectId, scanId);
+    console.log('[measure] started');
+  } catch (e: any) {
+    console.log('[measure] start failed', e?.message || e);
+  }
+}
+And after a successful insert in saveArScan, kick it off (don’t await):
+
+ts
+Copy code
+// after: return { scanId: data.id, ... }
+setTimeout(() => startMeasurementJob(opts.projectId, data.id).catch(()=>{}), 0);
+return { scanId: data.id, imageUrl: data.image_url, source: 'ar' as const };
+app/screens/ProjectDetails.tsx
+
+Add header preview that fetches latest scan overlay from webhooks and displays it. If not ready, show “Measuring…”; once ready, show overlay image with a “Save” icon.
+
+Code (add near top):
+
+ts
+Copy code
+import { pollScanMeasurement } from '../lib/api';
+import { supabase } from '../lib/supabase';
+Add local state and effect (inside component):
+
+ts
+Copy code
+const [overlayUrl, setOverlayUrl] = React.useState<string | null>(null);
+const [baseImgUrl, setBaseImgUrl] = React.useState<string | null>(null);
+const [measuring, setMeasuring] = React.useState(false);
+
+// load most recent scan & poll overlay
+React.useEffect(() => {
+  let alive = true;
+  (async () => {
+    try {
+      // get latest scan id for this project
+      const { data, error } = await supabase
+        .from('room_scans')
+        .select('id, image_url, created_at')
+        .eq('project_id', project.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) return;
+      setBaseImgUrl(data.image_url ?? null);
+      setMeasuring(true);
+      const status = await pollScanMeasurement(project.id, data.id, { tries: 30, intervalMs: 2000 });
+      if (!alive) return;
+      if (status.ready) {
+        setOverlayUrl(status.overlay_url);
+        if (status.image_url) setBaseImgUrl(status.image_url);
+      }
+    } catch (e) {
+      // swallow; header will just show “No scan image yet”
+    } finally {
+      if (alive) setMeasuring(false);
+    }
+  })();
+  return () => { alive = false; };
+}, [project.id]);
+Replace the existing header image placeholder with:
+
+tsx
+Copy code
+<View style={{ borderRadius: 16, overflow: 'hidden', backgroundColor: '#F3F4F6', height: 220, marginHorizontal: 16, marginTop: 8 }}>
+  {overlayUrl || baseImgUrl ? (
+    <Image source={{ uri: overlayUrl ?? baseImgUrl! }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+  ) : (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: '#9CA3AF' }}>
+        {measuring ? 'Measuring…' : 'No scan image yet'}
+      </Text>
+    </View>
+  )}
+</View>
+Migrations: none (we reuse existing room_scans table).
+
