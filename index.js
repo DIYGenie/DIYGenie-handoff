@@ -1184,6 +1184,46 @@ app.get('/api/projects/:id/plan', async (req, res) => {
   }
 });
 
+// POST /api/projects/:id/plan - Update project plan
+app.post('/api/projects/:id/plan', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { plan_json, status } = req.body;
+    
+    if (!plan_json) {
+      return res.status(400).json({ ok: false, error: 'plan_json required' });
+    }
+    
+    const updateData = { 
+      plan_json,
+      updated_at: new Date().toISOString()
+    };
+    
+    // Update status if provided
+    if (status) {
+      updateData.status = status;
+    }
+    
+    const { data, error } = await supabase
+      .from('projects')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .maybeSingle();
+    
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    console.log(`[plan UPDATE] Project ${id} plan updated, status: ${data.status}`);
+    return res.json({ ok: true, project: data });
+  } catch (e) {
+    console.error('[ERROR] POST plan exception:', e.message);
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // --- Progress tracking endpoints ---
 // GET progress for a project
 app.get('/api/projects/:id/progress', async (req, res) => {

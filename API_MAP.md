@@ -432,10 +432,9 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 - **Query params:** -
 - **Path params:** `id` (project UUID)
 - **Request body:** -
-- **Response (success):** `200 { ok: true, plan_text: "markdown-formatted-plan" }`
+- **Response (success):** `200 { ok: true, plan_text: "markdown-formatted-plan", status: "project_status" }`
 - **Response (errors):**
   - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
-  - `409 { ok: false, error: "plan_not_ready", status: "current_status" }` - Plan not ready
   - `500 { ok: false, error: "error_message" }` - Server error
 - **Side effects:** Reads from `projects` table, formats `plan_json` to markdown
 - **Logs/phrases:** `[ERROR] GET plan database error`, `[ERROR] GET plan exception`
@@ -443,6 +442,53 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 **Sample:**
 ```bash
 curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/plan
+```
+
+---
+
+### POST /api/projects/:id/plan
+- **Handler file:** `index.js:1190`
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):**
+```json
+{
+  "plan_json": {
+    "summary": { "title": "...", "difficulty": "beginner|intermediate|advanced", "est_cost": "...", "est_time": "..." },
+    "steps": [{ "step": 1, "title": "...", "detail": "...", "duration_minutes": 30 }],
+    "materials": [{ "name": "...", "qty": "...", "unit": "...", "cost": "..." }],
+    "tools": ["tool1", "tool2"],
+    "safety": ["tip1", "tip2"],
+    "tips": ["tip1", "tip2"]
+  },
+  "status": "plan_ready"
+}
+```
+- **Response (success):** `200 { ok: true, project: {...} }` (full project object)
+- **Response (errors):**
+  - `400 { ok: false, error: "plan_json required" }` - Missing plan_json
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Updates `projects` table (plan_json, status, updated_at)
+- **Logs/phrases:** `[plan UPDATE] Project ... plan updated, status: ...`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/plan \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "plan_json": {
+      "summary": {"title":"Build Shelf","difficulty":"beginner","est_cost":"$50","est_time":"2 hours"},
+      "steps": [{"step":1,"title":"Cut wood","detail":"Cut to size","duration_minutes":30}],
+      "tools": ["saw","drill"],
+      "materials": [{"name":"Wood","qty":"1","unit":"board"}],
+      "safety": ["Wear safety glasses"],
+      "tips": ["Sand smooth"]
+    },
+    "status": "plan_ready"
+  }'
 ```
 
 ---
@@ -739,11 +785,11 @@ curl https://your-api.com/billing/portal-return
 
 ## Summary
 
-**Total Endpoints:** 25
+**Total Endpoints:** 26
 
 **By Method:**
 - GET: 14
-- POST: 10
+- POST: 11
 - DELETE: 1
 
 **By Category:**
@@ -751,6 +797,6 @@ curl https://your-api.com/billing/portal-return
 - Entitlements: 3
 - Billing: 3
 - Projects (CRUD): 4
-- Project Actions: 8
+- Project Actions: 9
 - Utilities: 2
 - Redirects: 3

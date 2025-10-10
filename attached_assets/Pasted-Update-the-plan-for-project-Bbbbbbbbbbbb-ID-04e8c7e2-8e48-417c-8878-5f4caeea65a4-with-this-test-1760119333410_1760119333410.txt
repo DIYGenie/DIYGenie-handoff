@@ -1,0 +1,60 @@
+Update the plan for project "Bbbbbbbbbbbb" (ID: 04e8c7e2-8e48-417c-8878-5f4caeea65a4) with this test markdown plan:
+
+## Overview
+Build a simple floating shelf perfect for displaying books and decor. Great beginner project that takes about 2-4 hours.
+
+**Skill Level:** beginner
+**Estimated Time:** 2-4 hours
+**Estimated Cost:** $45-65
+
+## Safety Warnings
+- Always wear safety glasses when cutting or drilling
+- Use hearing protection with power tools
+- Work in a well-ventilated area
+
+## Materials
+- Pine board 1x10 x 6ft — 1 piece ($18)
+- Wood screws 2.5" — 1 box ($8)
+- Wood glue — 1 bottle ($6)
+- Sandpaper 120/220 grit — 1 pack ($7)
+- Wood stain (optional) — 1 can ($15)
+- Wall anchors — 4 pieces ($6)
+
+## Tools
+- Drill/driver (rental $25/day if needed)
+- Circular saw (rental $35/day if needed)
+- Level (you probably have this)
+- Measuring tape (you probably have this)
+- Pencil (you probably have this)
+- Safety glasses (you probably have this)
+
+## Cut List
+- Shelf board: 36" × 9.25" × 3/4" ×1
+- Support cleat: 34" × 1.5" × 3/4" ×1
+
+## Build Steps
+
+### Step 1: Measure and mark (15 min)
+Measure and mark your cutting lines on the pine board. You'll need one 36" piece for the shelf and one 34" piece for the wall cleat.
+
+### Step 2: Cut boards (20 min)
+Using the circular saw, carefully cut both pieces. Double-check measurements before cutting.
+
+### Step 3: Sand surfaces (25 min)
+Sand all surfaces starting with 120-grit, then finish with 220-grit for a smooth surface.
+
+### Step 4: Apply finish (1-2 hours)
+If using stain, apply evenly and let dry completely. Apply 2 coats for best results.
+
+### Step 5: Install wall cleat (15 min)
+Find studs and mount the 34" cleat to the wall using level. Use wall anchors where studs aren't available.
+
+### Step 6: Attach shelf (10 min)
+Apply wood glue to top of cleat, then position shelf. Secure with screws from underneath.
+
+## Finishing
+- Touch up any visible screw holes with wood filler
+- Apply final protective coat if desired
+- Let cure 24 hours before loading with items
+
+Update the plan_status to 'ready' for this project.
