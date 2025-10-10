@@ -447,6 +447,52 @@ curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/plan
 
 ---
 
+### GET /api/projects/:id/progress
+- **Handler file:** `index.js` (progress tracking)
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { completed_steps: number[], current_step_index: number }`
+- **Response (errors):** `500 { error: "Failed to fetch progress" }`
+- **Side effects:** Reads from `projects` table (completed_steps, current_step_index)
+- **Logs/phrases:** `[progress GET error]`
+
+**Sample:**
+```bash
+curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/progress
+```
+
+---
+
+### POST /api/projects/:id/progress
+- **Handler file:** `index.js` (progress tracking)
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):**
+```json
+{
+  "completed_steps": [1, 2, 3],
+  "current_step_index": 3
+}
+```
+- **Response (success):** `200` (updated project object)
+- **Response (errors):** `500 { error: "Failed to update progress" }`
+- **Side effects:** Updates `projects` table (completed_steps, current_step_index)
+- **Logs/phrases:** `[progress POST error]`
+
+**Sample:**
+```bash
+curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/progress \
+  -H 'Content-Type: application/json' \
+  -d '{"completed_steps":[1,2,3],"current_step_index":3}'
+```
+
+---
+
 ### DELETE /api/projects/:id
 - **Handler file:** `index.js:1193`
 - **Auth:** none
@@ -693,11 +739,11 @@ curl https://your-api.com/billing/portal-return
 
 ## Summary
 
-**Total Endpoints:** 23
+**Total Endpoints:** 25
 
 **By Method:**
-- GET: 13
-- POST: 9
+- GET: 14
+- POST: 10
 - DELETE: 1
 
 **By Category:**
@@ -705,6 +751,6 @@ curl https://your-api.com/billing/portal-return
 - Entitlements: 3
 - Billing: 3
 - Projects (CRUD): 4
-- Project Actions: 6
+- Project Actions: 8
 - Utilities: 2
 - Redirects: 3
