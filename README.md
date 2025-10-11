@@ -75,6 +75,58 @@ Run these SQL migrations in your Supabase SQL Editor to enable all features:
    - Adds `measure_status` and `measure_result` to room_scans table
    - Required for AR scan measurement endpoints
 
+## Admin Endpoints
+
+### Purge Test Data
+
+Remove all data (projects, scans, storage files) for specific users.
+
+**Authentication:**
+Set `ADMIN_TOKEN` environment variable to a secure random string.
+
+**Usage Examples:**
+
+Dry run (preview what will be deleted):
+```bash
+curl -X DELETE "https://api.diygenieapp.com/api/admin/purge-test-data?user=U1,U2&dryRun=true" \
+  -H "x-admin-token: $ADMIN_TOKEN"
+```
+
+Execute deletion:
+```bash
+curl -X DELETE "https://api.diygenieapp.com/api/admin/purge-test-data?user=U1,U2" \
+  -H "x-admin-token: $ADMIN_TOKEN"
+```
+
+**Response (dry run):**
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "users": [
+    {
+      "user_id": "U1",
+      "projects": 5,
+      "scans": 3,
+      "files": 3
+    }
+  ]
+}
+```
+
+**Response (execution):**
+```json
+{
+  "ok": true,
+  "deleted": {
+    "projects": 5,
+    "scans": 3,
+    "files": 3
+  },
+  "users": [...]
+}
+```
+
 ## Testing
 
 Run automated app test (no manual IDs required):

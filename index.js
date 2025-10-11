@@ -1687,117 +1687,142 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 app.delete('/api/admin/purge-test-data', async (req, res) => {
   try {
     // Auth guard
-    const provided =
-      req.headers['x-admin-token'] ||
-      req.query.admin_token ||
-      req.body?.admin_token;
-    if (!ADMIN_TOKEN || provided !== ADMIN_TOKEN) {
-      return res.status(403).json({ ok: false, error: 'forbidden' });
+    const token = req.headers['x-admin-token'];
+    if (!token || !ADMIN_TOKEN || token !== ADMIN_TOKEN) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    // Controls (optional)
-    const days = Number(req.query.days ?? 9999);
+    // Required params
+    const userParam = req.query.user;
+    if (!userParam) {
+      return res.status(400).json({ ok: false, error: 'user parameter required' });
+    }
+
+    const userIds = userParam.split(',').map(u => u.trim()).filter(Boolean);
     const dryRun = String(req.query.dryRun ?? 'false') === 'true';
 
-    // Find candidate projects
-    const cutoffISO = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    console.log('[admin purge] start', { userIds, dryRun });
 
-    const { data: projects, error: projErr } = await supabase
-      .from('projects')
-      .select('id, name, user_id, status, created_at')
-      .or('name.ilike.Test%,name.ilike.%test%')
-      .limit(1000);
+    const userDetails = [];
+    let totalProjects = 0;
+    let totalScans = 0;
+    let totalFiles = 0;
 
-    if (projErr) throw projErr;
+    // Process each user
+    for (const userId of userIds) {
+      // Find projects for this user
+      const { data: projects, error: projErr } = await supabase
+        .from('projects')
+        .select('id')
+        .eq('user_id', userId);
+      if (projErr) throw projErr;
 
-    // Also include very old drafts
-    const { data: oldDrafts, error: draftErr } = await supabase
-      .from('projects')
-      .select('id, name, user_id, status, created_at')
-      .eq('status', 'draft')
-      .lt('created_at', cutoffISO)
-      .limit(1000);
+      // Find scans for this user
+      const { data: scans, error: scanErr } = await supabase
+        .from('room_scans')
+        .select('id')
+        .eq('user_id', userId);
+      if (scanErr) throw scanErr;
 
-    if (draftErr) throw draftErr;
+      // Find storage files for this user (list files in user's folder)
+      const bucket = supabase.storage.from('room-scans');
+      let files = [];
+      let offset = 0;
+      const limit = 1000;
+      
+      while (true) {
+        const { data: fileList, error: listErr } = await bucket.list(userId, {
+          limit,
+          offset,
+          search: ''
+        });
+        if (listErr) throw listErr;
+        if (!fileList || fileList.length === 0) break;
+        files = files.concat(fileList.map(f => `${userId}/${f.name}`));
+        if (fileList.length < limit) break;
+        offset += limit;
+      }
 
-    // De-dupe
-    const byId = new Map();
-    [...(projects ?? []), ...(oldDrafts ?? [])].forEach(p => byId.set(p.id, p));
-    const toDelete = [...byId.values()];
-    if (!toDelete.length) {
-      return res.json({ ok: true, message: 'nothing to delete', deleted_projects: 0, deleted_scans: 0, deleted_files: 0, dryRun });
+      const userDetail = {
+        user_id: userId,
+        projects: projects?.length || 0,
+        scans: scans?.length || 0,
+        files: files.length
+      };
+
+      userDetails.push(userDetail);
+      totalProjects += userDetail.projects;
+      totalScans += userDetail.scans;
+      totalFiles += userDetail.files;
+
+      console.log('[admin purge] user', userDetail);
     }
 
-    // Collect related scans
-    const ids = toDelete.map(p => p.id);
-    const { data: scans, error: scanErr } = await supabase
-      .from('room_scans')
-      .select('id, project_id, user_id, image_url')
-      .in('project_id', ids)
-      .limit(5000);
-    if (scanErr) throw scanErr;
-
-    // Extract storage paths from public URLs
-    const extractPath = (url) => {
-      if (!url) return null;
-      const marker = '/room-scans/';
-      const i = url.indexOf(marker);
-      return i >= 0 ? url.slice(i + marker.length) : null;
-    };
-    const paths = (scans ?? [])
-      .map(s => extractPath(s.image_url))
-      .filter(Boolean);
-
-    // DRY RUN short-circuit
+    // Dry run - return counts only
     if (dryRun) {
       return res.json({
         ok: true,
         dryRun: true,
-        will_delete_projects: toDelete.length,
-        will_delete_scans: scans?.length || 0,
-        will_delete_files: paths.length,
-        sample_projects: toDelete.slice(0, 3),
-        sample_paths: paths.slice(0, 5),
+        users: userDetails
       });
     }
 
-    // Delete storage files in chunks of 100
+    // Execute deletion
     let deletedFiles = 0;
+    let deletedScans = 0;
+    let deletedProjects = 0;
+
+    // Delete storage files for each user
     const bucket = supabase.storage.from('room-scans');
-    for (let i = 0; i < paths.length; i += 100) {
-      const chunk = paths.slice(i, i + 100);
-      const { data: rem, error: remErr } = await bucket.remove(chunk);
-      if (remErr) throw remErr;
-      deletedFiles += rem?.length || chunk.length;
+    for (const userId of userIds) {
+      let offset = 0;
+      const limit = 1000;
+      
+      while (true) {
+        const { data: fileList, error: listErr } = await bucket.list(userId, {
+          limit,
+          offset,
+          search: ''
+        });
+        if (listErr) throw listErr;
+        if (!fileList || fileList.length === 0) break;
+        
+        const paths = fileList.map(f => `${userId}/${f.name}`);
+        const { error: removeErr } = await bucket.remove(paths);
+        if (removeErr) throw removeErr;
+        
+        deletedFiles += paths.length;
+        if (fileList.length < limit) break;
+        offset += limit;
+      }
     }
 
-    // Delete dependent rows (order matters if FKs aren't cascading)
-    try {
-      await supabase.from('plans').delete().in('project_id', ids);
-    } catch {}
-    try {
-      await supabase.from('previews').delete().in('project_id', ids);
-    } catch {}
-
-    // room_scans
+    // Delete scans
     const { error: delScansErr } = await supabase
       .from('room_scans')
       .delete()
-      .in('project_id', ids);
+      .in('user_id', userIds);
     if (delScansErr) throw delScansErr;
+    deletedScans = totalScans;
 
-    // projects
+    // Delete projects
     const { error: delProjErr } = await supabase
       .from('projects')
       .delete()
-      .in('id', ids);
+      .in('user_id', userIds);
     if (delProjErr) throw delProjErr;
+    deletedProjects = totalProjects;
+
+    console.log('[admin purge] deleted', { projects: deletedProjects, scans: deletedScans, files: deletedFiles });
 
     return res.json({
       ok: true,
-      deleted_projects: ids.length,
-      deleted_scans: scans?.length || 0,
-      deleted_files: deletedFiles,
+      deleted: {
+        projects: deletedProjects,
+        scans: deletedScans,
+        files: deletedFiles
+      },
+      users: userDetails
     });
   } catch (err) {
     console.error('[admin purge] error', err);
