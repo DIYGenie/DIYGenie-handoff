@@ -599,8 +599,66 @@ curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440
 
 ---
 
+### POST /api/projects/:projectId/preview
+- **Handler file:** `index.js:1425`
+- **Auth:** Requires authenticated user via `user_id` in request body/query. Uses explicit queries to verify project ownership
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** `user_id` (UUID, optional if in body)
+- **Path params:** `projectId` (project UUID)
+- **Request body (JSON, optional):**
+```json
+{
+  "user_id": "550e8400-e29b-41d4-a716-446655440001",
+  "roi": { "x": 0.25, "y": 0.70, "w": 0.34, "h": 0.23 }
+}
+```
+- **Response (success):** `200 { ok: true, status: "done", preview_url: "https://..." }`
+- **Response (errors):**
+  - `400 { ok: false, error: "user_id required" }` - Missing user_id
+  - `400 { ok: false, error: "projectId required" }` - Missing path param
+  - `403 { ok: false, error: "forbidden" }` - Project owned by different user
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Updates `projects` table (preview_status='done', preview_url, preview_meta)
+- **Logs/phrases:** `[preview web] start`, `[preview web] update complete`
+- **Stub behavior:** Immediately sets preview_status='done' with placeholder image `https://images.unsplash.com/photo-1524758631624-e2822e304c36?w=1200` and meta `{ model: "stub", roi?: {...} }`
+
+**Sample:**
+```bash
+curl -X POST https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440001/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"550e8400-e29b-41d4-a716-446655440001","roi":{"x":0.25,"y":0.70,"w":0.34,"h":0.23}}'
+```
+
+---
+
+### GET /api/projects/:projectId/preview/status
+- **Handler file:** `index.js:1488`
+- **Auth:** Requires authenticated user via `user_id` in query params. Uses explicit queries to verify project ownership and read preview data
+- **Request headers:** -
+- **Query params:** `user_id` (UUID, required)
+- **Path params:** `projectId` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, status: "done", preview_url: "https://...", preview_meta: { model: "stub", ... } }`
+- **Response (errors):**
+  - `400 { ok: false, error: "user_id required" }` - Missing user_id
+  - `400 { ok: false, error: "projectId required" }` - Missing path param
+  - `403 { ok: false, error: "forbidden" }` - Project owned by different user
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `409 { ok: false, error: "not_ready" }` - Preview not yet available (status not 'done')
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Reads from `projects` table
+- **Logs/phrases:** `[preview web] status check`, `[preview web] status error`
+
+**Sample:**
+```bash
+curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440001/preview/status?user_id=550e8400-e29b-41d4-a716-446655440001"
+```
+
+---
+
 ### DELETE /api/projects/:id
-- **Handler file:** `index.js:1375`
+- **Handler file:** `index.js:1545`
 - **Auth:** none
 - **Request headers:** -
 - **Query params:** -
