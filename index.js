@@ -820,6 +820,74 @@ app.post('/api/projects', async (req, res) => {
   }
 });
 
+// --- Projects: PATCH (update with whitelist) ---
+app.patch('/api/projects/:projectId', async (req, res) => {
+  try {
+    const projectId = req.params.projectId;
+    const userId = (req.body?.user_id || req.query?.user_id || '').trim();
+    
+    if (!userId) {
+      return res.status(400).json({ ok: false, error: 'user_id_required' });
+    }
+    
+    console.log('[projects PATCH] start', { projectId, user_id: userId });
+    
+    // Load project and verify ownership
+    const { data: proj, error: projError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', projectId)
+      .maybeSingle();
+    
+    if (projError) throw projError;
+    if (!proj) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    if (proj.user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    
+    // Whitelist fields
+    const whitelist = ['status', 'name', 'preview_url'];
+    const updates = {};
+    
+    for (const key of whitelist) {
+      if (req.body.hasOwnProperty(key)) {
+        updates[key] = req.body[key];
+      }
+    }
+    
+    // Require at least one updatable field
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ ok: false, error: 'no_updatable_fields_provided' });
+    }
+    
+    // Always bump updated_at
+    updates.updated_at = new Date().toISOString();
+    
+    // Update project
+    const { data: updated, error: updateError } = await supabase
+      .from('projects')
+      .update(updates)
+      .eq('id', projectId)
+      .select('id, user_id, name, status, preview_url, updated_at, created_at')
+      .maybeSingle();
+    
+    if (updateError) throw updateError;
+    
+    console.log('[projects PATCH] updated', { 
+      id: updated.id, 
+      status: updated.status, 
+      hasPreview: !!updated.preview_url 
+    });
+    
+    return res.json({ ok: true, item: updated });
+  } catch (e) {
+    console.error('[projects PATCH] error:', e.message);
+    return res.status(500).json({ ok: false, error: 'server_error' });
+  }
+});
+
 // POST /api/projects/:id/image  (accepts multipart file/image OR direct_url)
 app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
   try {
