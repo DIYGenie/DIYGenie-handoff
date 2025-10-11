@@ -1325,6 +1325,70 @@ app.post('/api/projects/:id/progress', async (req, res) => {
   }
 });
 
+// --- Scans endpoints ---
+// GET /api/projects/:projectId/scans/latest
+app.get('/api/projects/:projectId/scans/latest', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const userId = (req.query?.user_id || '').trim();
+    
+    if (!userId) {
+      return res.status(400).json({ ok: false, error: 'user_id required' });
+    }
+    if (!projectId) {
+      return res.status(400).json({ ok: false, error: 'projectId required' });
+    }
+    
+    console.log('[scans latest] fetch', { projectId, userId });
+    
+    // Query 1: Verify user owns the project
+    const { data: proj, error: projError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', projectId)
+      .maybeSingle();
+    
+    if (projError || !proj) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    if (proj.user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    
+    // Query 2: Get the most recent scan for this project
+    const { data: scan, error: scanError } = await supabase
+      .from('room_scans')
+      .select('id, image_url, roi, measure_status, measure_result')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (scanError) throw scanError;
+    
+    if (!scan) {
+      return res.status(404).json({ ok: false, error: 'scan_not_found' });
+    }
+    
+    console.log('[scans latest] found', { scanId: scan.id, hasMeasurement: !!scan.measure_result });
+    
+    res.json({ 
+      ok: true, 
+      scan: {
+        id: scan.id,
+        image_url: scan.image_url,
+        roi: scan.roi,
+        measure_status: scan.measure_status,
+        measure_result: scan.measure_result
+      }
+    });
+  } catch (e) {
+    console.error('[scans latest] error:', e.message);
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // --- Measurement endpoints ---
 // POST /api/projects/:projectId/scans/:scanId/measure
 app.post('/api/projects/:projectId/scans/:scanId/measure', async (req, res) => {
