@@ -7,6 +7,37 @@
 
 ## Endpoints
 
+### GET /debug/decor8
+- **Handler file:** `index.js:323`
+- **Auth:** none (temporary diagnostic endpoint)
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true, hasKey: boolean, base: string|null, endpointExists: boolean, env: string[] }`
+- **Response (errors):** -
+- **Side effects:** Logs `[debug] decor8 check`
+- **Logs/phrases:** `[debug] decor8 check`
+- **Note:** Temporary endpoint to verify Decor8 integration readiness. Will be removed after verification.
+
+**Sample:**
+```bash
+curl https://api.diygenieapp.com/debug/decor8
+```
+
+**Expected Response:**
+```json
+{
+  "ok": true,
+  "hasKey": true,
+  "base": "https://api.decor8.ai",
+  "endpointExists": true,
+  "env": ["DECOR8_BASE_URL", "DECOR8_API_KEY", ...]
+}
+```
+
+---
+
 ### GET /health
 - **Handler file:** `index.js:306`
 - **Auth:** none

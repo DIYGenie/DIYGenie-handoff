@@ -316,6 +316,18 @@ app.get('/', (req, res) => res.json({
   base: 'v1'
 }));
 
+// --- Debug endpoint for Decor8 integration ---
+app.get('/debug/decor8', async (req, res) => {
+  console.log('[debug] decor8 check');
+  res.json({
+    ok: true,
+    hasKey: !!process.env.DECOR8_API_KEY,
+    base: process.env.DECOR8_BASE_URL || null,
+    endpointExists: typeof callDecor8Generate === 'function',
+    env: Object.keys(process.env).filter(k => k.toLowerCase().includes('decor8')),
+  });
+});
+
 // --- Entitlements endpoint ---
 // GET /me/entitlements/:userId
 app.get('/me/entitlements/:userId', async (req, res) => {
