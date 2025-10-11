@@ -247,6 +247,33 @@ async function callDecor8Generate({ input_image_url, room_type, design_style }) 
   return data; // expected: { error: "", message: "...", info: { images: [...] } }
 }
 
+async function callDecor8Status(jobId) {
+  if (!jobId) throw new Error('jobId required');
+  
+  const res = await fetch(`${DECOR8_BASE_URL}/job_status/${jobId}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${DECOR8_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || `Decor8 status ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  
+  // Expected response: { status: 'queued'|'running'|'done'|'failed', url?: string }
+  return data;
+}
+
 // --- OpenAI helpers ----------------------------------------------------------
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
