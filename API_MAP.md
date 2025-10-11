@@ -570,6 +570,31 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 
 ---
 
+### GET /api/projects/:projectId/scans/latest
+- **Handler file:** `index.js:1333`
+- **Auth:** Requires authenticated user via `user_id` in query params. Uses explicit queries to verify project ownership
+- **Request headers:** -
+- **Query params:** `user_id` (UUID, required)
+- **Path params:** `projectId` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { ok: true, scan: { id: "uuid", image_url: "https://...", roi: {...}, measure_status: "done|null", measure_result: {...} } }`
+- **Response (errors):**
+  - `400 { ok: false, error: "user_id required" }` - Missing user_id
+  - `400 { ok: false, error: "projectId required" }` - Missing projectId
+  - `403 { ok: false, error: "forbidden" }` - Project owned by different user
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `404 { ok: false, error: "scan_not_found" }` - No scans found for project
+  - `500 { ok: false, error: "error_message" }` - Server error
+- **Side effects:** Reads from `room_scans` table (most recent scan by created_at)
+- **Logs/phrases:** `[scans latest] fetch`, `[scans latest] found`
+
+**Sample:**
+```bash
+curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440001/scans/latest?user_id=550e8400-e29b-41d4-a716-446655440001"
+```
+
+---
+
 ### POST /api/projects/:projectId/scans/:scanId/measure
 - **Handler file:** `index.js:1287`
 - **Auth:** Requires authenticated user via `user_id` in request body/query. Uses two explicit queries to verify scan→project and project→user ownership
