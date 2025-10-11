@@ -1416,6 +1416,128 @@ app.get('/api/projects/:projectId/scans/:scanId/measure/status', async (req, res
   }
 });
 
+// --- Preview Endpoints ---
+
+// POST /api/projects/:projectId/preview
+app.post('/api/projects/:projectId/preview', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const userId = resolveUserIdFrom(req);
+    const roi = req.body?.roi;
+    
+    if (!userId) {
+      return res.status(400).json({ ok: false, error: 'user_id required' });
+    }
+    if (!projectId) {
+      return res.status(400).json({ ok: false, error: 'projectId required' });
+    }
+    
+    console.log('[preview web] start', { projectId, userId });
+    
+    // Query 1: Verify project exists
+    const { data: proj, error: projError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', projectId)
+      .single();
+    
+    if (projError || !proj) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    // Query 2: Verify user owns the project
+    if (proj.user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    
+    // Stub: Immediately set preview as done with placeholder image
+    const previewUrl = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?w=1200';
+    const previewMeta = {
+      model: 'stub',
+      ...(roi && { roi })
+    };
+    
+    const { error: updateError } = await supabase
+      .from('projects')
+      .update({
+        preview_status: 'done',
+        preview_url: previewUrl,
+        preview_meta: previewMeta
+      })
+      .eq('id', projectId);
+    
+    if (updateError) throw updateError;
+    
+    console.log('[preview web] update complete', { projectId, previewUrl });
+    
+    res.json({ 
+      ok: true, 
+      status: 'done', 
+      preview_url: previewUrl 
+    });
+  } catch (e) {
+    console.error('[preview web] error:', e.message);
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
+// GET /api/projects/:projectId/preview/status
+app.get('/api/projects/:projectId/preview/status', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const userId = resolveUserIdFrom(req);
+    
+    if (!userId) {
+      return res.status(400).json({ ok: false, error: 'user_id required' });
+    }
+    if (!projectId) {
+      return res.status(400).json({ ok: false, error: 'projectId required' });
+    }
+    
+    console.log('[preview web] status check', { projectId, userId });
+    
+    // Query 1: Verify project exists
+    const { data: proj, error: projError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', projectId)
+      .single();
+    
+    if (projError || !proj) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    // Query 2: Verify user owns the project
+    if (proj.user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    
+    // Query 3: Read preview data
+    const { data: rec, error: recError } = await supabase
+      .from('projects')
+      .select('preview_status, preview_url, preview_meta')
+      .eq('id', projectId)
+      .single();
+    
+    if (recError) throw recError;
+    
+    // Check if preview is ready
+    if (rec.preview_status !== 'done') {
+      return res.status(409).json({ ok: false, error: 'not_ready' });
+    }
+    
+    res.json({ 
+      ok: true, 
+      status: 'done', 
+      preview_url: rec.preview_url,
+      preview_meta: rec.preview_meta
+    });
+  } catch (e) {
+    console.error('[preview web] status error:', e.message);
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // --- Projects: DELETE ---
 app.delete('/api/projects/:id', async (req, res) => {
   try {
