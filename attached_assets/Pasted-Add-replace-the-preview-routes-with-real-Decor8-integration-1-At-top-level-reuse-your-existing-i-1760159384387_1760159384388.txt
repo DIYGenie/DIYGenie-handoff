@@ -1,0 +1,135 @@
+Add/replace the preview routes with real Decor8 integration.
+
+1) At top-level (reuse your existing imports/helpers):
+// Ensure these helpers exist and are exported:
+// - callDecor8Generate({ imageUrl, prompt, roi? }) -> { jobId }
+// - callDecor8Status(jobId) -> { status: 'queued'|'running'|'done'|'failed', url?: string }
+
+2) Create/ensure DB helpers (near your other supabase helpers):
+async function getProjectForUser(projectId, userId) {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id, user_id, preview_status, preview_job_id, preview_url, input_image_url')
+    .eq('id', projectId)
+    .single();
+  if (error || !data) return null;
+  if (data.user_id !== userId) return null;
+  return data;
+}
+
+async function updatePreviewState(projectId, patch) {
+  return supabase.from('projects').update(patch).eq('id', projectId).select('id').single();
+}
+
+3) START endpoint (POST /api/projects/:projectId/preview/start)
+app.post('/api/projects/:projectId/preview/start', async (req, res) => {
+  try {
+    const userId = (req.body?.user_id || req.query?.user_id || '').trim();
+    const projectId = req.params.projectId;
+    if (!userId) return res.status(400).json({ ok:false, error:'user_id_required' });
+
+    const proj = await getProjectForUser(projectId, userId);
+    if (!proj) return res.status(404).json({ ok:false, error:'project_not_found_or_forbidden' });
+
+    // Allow re-use guard: if already done and url present, just return
+    if (proj.preview_status === 'done' && proj.preview_url) {
+      return res.json({ ok:true, status:'done', url: proj.preview_url });
+    }
+
+    // Source image: prefer uploaded scan image; fallback to project input_image_url if you store it
+    // If your scans table stores the latest image, you can enrich this later—keep simple first.
+    const imageUrl = proj.input_image_url || req.body?.image_url; // optional fallback
+    const roi = req.body?.roi || null; // optional normalized ROI {x,y,w,h}
+    const prompt = req.body?.prompt || 'Decorate this space in a modern DIY-friendly style.';
+
+    if (!imageUrl) {
+      // Still allow queueing with ROI-only cases, but Decor8 will need an image.
+      return res.status(409).json({ ok:false, error:'image_required_for_preview' });
+    }
+
+    // Kick job
+    console.log('[preview] start', { projectId, hasROI: !!roi });
+    const start = await callDecor8Generate({ imageUrl, prompt, roi }); // returns { jobId }
+    if (!start?.jobId) return res.status(502).json({ ok:false, error:'decor8_start_failed' });
+
+    await updatePreviewState(projectId, {
+      preview_status: 'queued',
+      preview_job_id: start.jobId,
+      preview_url: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    return res.json({ ok:true, status:'queued', jobId: start.jobId });
+  } catch (e) {
+    console.error('[preview] start error', e);
+    return res.status(500).json({ ok:false, error:'server_error' });
+  }
+});
+
+4) STATUS endpoint (GET /api/projects/:projectId/preview/status)
+app.get('/api/projects/:projectId/preview/status', async (req, res) => {
+  try {
+    const userId = (req.query?.user_id || '').trim();
+    const projectId = req.params.projectId;
+    if (!userId) return res.status(400).json({ ok:false, error:'user_id_required' });
+
+    const proj = await getProjectForUser(projectId, userId);
+    if (!proj) return res.status(404).json({ ok:false, error:'project_not_found_or_forbidden' });
+
+    // Fast-path if already done
+    if (proj.preview_status === 'done' && proj.preview_url) {
+      return res.json({ ok:true, status:'done', url: proj.preview_url });
+    }
+
+    // If we don't have a job yet
+    if (!proj.preview_job_id) {
+      return res.status(409).json({ ok:false, error:'not_started' });
+    }
+
+    // Ask Decor8
+    console.log('[preview] polling…', { projectId });
+    const stat = await callDecor8Status(proj.preview_job_id); // -> {status, url?}
+
+    if (!stat || !stat.status) {
+      return res.status(502).json({ ok:false, error:'decor8_status_failed' });
+    }
+
+    // Update DB on terminal states
+    if (stat.status === 'done' && stat.url) {
+      await updatePreviewState(projectId, {
+        preview_status: 'done',
+        preview_url: stat.url,
+        updated_at: new Date().toISOString(),
+      });
+      return res.json({ ok:true, status:'done', url: stat.url });
+    }
+
+    if (stat.status === 'failed') {
+      await updatePreviewState(projectId, {
+        preview_status: 'failed',
+        updated_at: new Date().toISOString(),
+      });
+      return res.status(500).json({ ok:false, status:'failed' });
+    }
+
+    // queued / running
+    await updatePreviewState(projectId, {
+      preview_status: stat.status,
+      updated_at: new Date().toISOString(),
+    });
+    return res.json({ ok:true, status: stat.status });
+  } catch (e) {
+    console.error('[preview] status error', e);
+    return res.status(500).json({ ok:false, error:'server_error' });
+  }
+});
+
+5) Ensure the projects table has these columns (already used above):
+-- Run once in Supabase if not present
+-- ALTER TABLE projects 
+--   ADD COLUMN IF NOT EXISTS preview_status TEXT,
+--   ADD COLUMN IF NOT EXISTS preview_job_id TEXT,
+--   ADD COLUMN IF NOT EXISTS preview_url TEXT,
+--   ADD COLUMN IF NOT EXISTS input_image_url TEXT;
+
+6) Remove the temporary /debug/decor8 endpoint AFTER verifying preview works end-to-end.
