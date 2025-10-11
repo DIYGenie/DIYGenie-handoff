@@ -870,8 +870,10 @@ app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
 
 // --- Preview generation route ------------------------------------------------
 // POST /api/projects/:id/preview
-// Gated by tier - requires previewAllowed and remaining quota
-app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, res) => {
+// COMMENTED OUT - Replaced by minimal preview endpoints below (lines ~1425)
+// OLD: Gated by tier - requires previewAllowed and remaining quota
+// app.post('/api/projects/:id/preview', requirePreviewOrBuildQuota, async (req, res) => {
+app.post('/api/projects/:id/preview-OLD-DISABLED', requirePreviewOrBuildQuota, async (req, res) => {
   try {
     const { id } = req.params;
     const { room_type, design_style } = req.body || {};
@@ -1439,7 +1441,7 @@ app.post('/api/projects/:projectId/preview', async (req, res) => {
       .from('projects')
       .select('id, user_id')
       .eq('id', projectId)
-      .single();
+      .maybeSingle();
     
     if (projError || !proj) {
       return res.status(404).json({ ok: false, error: 'project_not_found' });
@@ -1501,7 +1503,7 @@ app.get('/api/projects/:projectId/preview/status', async (req, res) => {
       .from('projects')
       .select('id, user_id')
       .eq('id', projectId)
-      .single();
+      .maybeSingle();
     
     if (projError || !proj) {
       return res.status(404).json({ ok: false, error: 'project_not_found' });
@@ -1517,7 +1519,7 @@ app.get('/api/projects/:projectId/preview/status', async (req, res) => {
       .from('projects')
       .select('preview_status, preview_url, preview_meta')
       .eq('id', projectId)
-      .single();
+      .maybeSingle();
     
     if (recError) throw recError;
     

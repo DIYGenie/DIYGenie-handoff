@@ -62,7 +62,9 @@ Entitlement enforcement:
 - `name` (text)
 - `status` (text): 'new' → 'draft' → 'preview_requested' → 'preview_ready' → 'planning' → 'plan_ready'
 - `input_image_url` (text, nullable)
-- `preview_url` (text, nullable)
+- `preview_url` (text, nullable) - Legacy preview URL
+- `preview_status` (text, nullable) - New: 'done' when preview ready
+- `preview_meta` (jsonb, nullable) - New: Preview metadata (model, roi, etc)
 - `plan_json` (jsonb, nullable)
 - `completed_steps` (integer array, for progress tracking)
 - `current_step_index` (integer, for progress tracking)
@@ -172,6 +174,22 @@ Transitions triggered by explicit API calls, not automatic
 - `@stripe/react-stripe-js` (^4.0.2) - Stripe React components
 
 ## Recent Updates
+
+### October 11, 2025
+**Minimal Preview Endpoints**
+- Added `POST /api/projects/:projectId/preview` - Trigger preview generation with optional ROI
+- Added `GET /api/projects/:projectId/preview/status` - Check preview status
+- Stub implementation returns immediate result with placeholder image: `https://images.unsplash.com/photo-1524758631624-e2822e304c36?w=1200`
+- Auth: Uses explicit separate queries to verify project ownership (no embedded Supabase selects)
+- Migration: `migrations/add_preview_columns.sql` adds preview_status, preview_url, preview_meta to projects
+- Test: `tests/preview.test.sh` for endpoint validation
+- Mirrors measure endpoint pattern for consistency
+- Disabled legacy preview endpoint (line 879) to avoid route conflicts
+
+**Measurement Endpoints Fix**
+- Fixed PostgREST "more than one relationship" error by replacing embedded queries with explicit separate queries
+- Both measure endpoints now use `.maybeSingle()` instead of `.single()` for better error handling
+- Improved error codes: 400 (missing params), 403 (forbidden), 404 (not found), 409 (not ready)
 
 ### October 10, 2025
 **Measurement Endpoints for AR Scans**
