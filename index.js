@@ -1474,125 +1474,108 @@ app.get('/api/projects/:projectId/scans/:scanId/measure/status', async (req, res
   }
 });
 
-// --- Preview Endpoints ---
+// --- Preview Endpoints with Decor8 Integration ---
 
-// POST /api/projects/:projectId/preview
-app.post('/api/projects/:projectId/preview', async (req, res) => {
+// POST /api/projects/:projectId/preview/start
+app.post('/api/projects/:projectId/preview/start', async (req, res) => {
   try {
-    const { projectId } = req.params;
-    const userId = resolveUserIdFrom(req);
-    const roi = req.body?.roi;
-    
-    if (!userId) {
-      return res.status(400).json({ ok: false, error: 'user_id required' });
+    const userId = (req.body?.user_id || req.query?.user_id || '').trim();
+    const projectId = req.params.projectId;
+    if (!userId) return res.status(400).json({ ok: false, error: 'user_id_required' });
+
+    const proj = await getProjectForUser(projectId, userId);
+    if (!proj) return res.status(404).json({ ok: false, error: 'project_not_found_or_forbidden' });
+
+    // Allow re-use guard: if already done and url present, just return
+    if (proj.preview_status === 'done' && proj.preview_url) {
+      return res.json({ ok: true, status: 'done', url: proj.preview_url });
     }
-    if (!projectId) {
-      return res.status(400).json({ ok: false, error: 'projectId required' });
+
+    // Source image: prefer uploaded scan image; fallback to project input_image_url
+    const imageUrl = proj.input_image_url || req.body?.image_url;
+    const roi = req.body?.roi || null;
+    const prompt = req.body?.prompt || 'Decorate this space in a modern DIY-friendly style.';
+
+    if (!imageUrl) {
+      return res.status(409).json({ ok: false, error: 'image_required_for_preview' });
     }
-    
-    console.log('[preview web] start', { projectId, userId });
-    
-    // Query 1: Verify project exists
-    const { data: proj, error: projError } = await supabase
-      .from('projects')
-      .select('id, user_id')
-      .eq('id', projectId)
-      .maybeSingle();
-    
-    if (projError || !proj) {
-      return res.status(404).json({ ok: false, error: 'project_not_found' });
-    }
-    
-    // Query 2: Verify user owns the project
-    if (proj.user_id !== userId) {
-      return res.status(403).json({ ok: false, error: 'forbidden' });
-    }
-    
-    // Stub: Immediately set preview as done with placeholder image
-    const previewUrl = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?w=1200';
-    const previewMeta = {
-      model: 'stub',
-      ...(roi && { roi })
-    };
-    
-    const { error: updateError } = await supabase
-      .from('projects')
-      .update({
-        preview_status: 'done',
-        preview_url: previewUrl,
-        preview_meta: previewMeta
-      })
-      .eq('id', projectId);
-    
-    if (updateError) throw updateError;
-    
-    console.log('[preview web] update complete', { projectId, previewUrl });
-    
-    res.json({ 
-      ok: true, 
-      status: 'done', 
-      preview_url: previewUrl 
+
+    // Kick job
+    console.log('[preview] start', { projectId, hasROI: !!roi });
+    const start = await callDecor8Generate({ 
+      input_image_url: imageUrl, 
+      room_type: req.body?.room_type || 'livingroom',
+      design_style: req.body?.design_style || 'modern'
     });
+    
+    if (!start?.jobId) return res.status(502).json({ ok: false, error: 'decor8_start_failed' });
+
+    await updatePreviewState(projectId, {
+      preview_status: 'queued',
+      preview_job_id: start.jobId,
+      preview_url: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    return res.json({ ok: true, status: 'queued', jobId: start.jobId });
   } catch (e) {
-    console.error('[preview web] error:', e.message);
-    res.status(500).json({ ok: false, error: String(e.message || e) });
+    console.error('[preview] start error', e);
+    return res.status(500).json({ ok: false, error: 'server_error' });
   }
 });
 
 // GET /api/projects/:projectId/preview/status
 app.get('/api/projects/:projectId/preview/status', async (req, res) => {
   try {
-    const { projectId } = req.params;
-    const userId = resolveUserIdFrom(req);
-    
-    if (!userId) {
-      return res.status(400).json({ ok: false, error: 'user_id required' });
+    const userId = (req.body?.user_id || req.query?.user_id || '').trim();
+    const projectId = req.params.projectId;
+    if (!userId) return res.status(400).json({ ok: false, error: 'user_id_required' });
+
+    const proj = await getProjectForUser(projectId, userId);
+    if (!proj) return res.status(404).json({ ok: false, error: 'project_not_found_or_forbidden' });
+
+    const { preview_status, preview_job_id, preview_url } = proj;
+
+    // Already done? Return final result
+    if (preview_status === 'done') {
+      return res.json({ ok: true, status: 'done', url: preview_url });
     }
-    if (!projectId) {
-      return res.status(400).json({ ok: false, error: 'projectId required' });
+
+    // Background job check
+    if (!preview_job_id) {
+      return res.json({ ok: true, status: preview_status || 'none' });
     }
-    
-    console.log('[preview web] status check', { projectId, userId });
-    
-    // Query 1: Verify project exists
-    const { data: proj, error: projError } = await supabase
-      .from('projects')
-      .select('id, user_id')
-      .eq('id', projectId)
-      .maybeSingle();
-    
-    if (projError || !proj) {
-      return res.status(404).json({ ok: false, error: 'project_not_found' });
+
+    const jobStatus = await callDecor8Status(preview_job_id);
+    console.log('[preview] status poll', { projectId, jobStatus: jobStatus.status });
+
+    if (jobStatus.status === 'done' && jobStatus.url) {
+      await updatePreviewState(projectId, {
+        preview_status: 'done',
+        preview_url: jobStatus.url,
+        updated_at: new Date().toISOString(),
+      });
+      return res.json({ ok: true, status: 'done', url: jobStatus.url });
     }
-    
-    // Query 2: Verify user owns the project
-    if (proj.user_id !== userId) {
-      return res.status(403).json({ ok: false, error: 'forbidden' });
+
+    if (jobStatus.status === 'failed') {
+      await updatePreviewState(projectId, {
+        preview_status: 'error',
+        updated_at: new Date().toISOString(),
+      });
+      return res.json({ ok: true, status: 'error', error: 'decor8_job_failed' });
     }
-    
-    // Query 3: Read preview data
-    const { data: rec, error: recError } = await supabase
-      .from('projects')
-      .select('preview_status, preview_url, preview_meta')
-      .eq('id', projectId)
-      .maybeSingle();
-    
-    if (recError) throw recError;
-    
-    // Check if preview is ready
-    if (rec.preview_status !== 'done') {
-      return res.status(409).json({ ok: false, error: 'not_ready' });
-    }
-    
-    res.json({ 
-      ok: true, 
-      status: 'done', 
-      preview_url: rec.preview_url,
-      preview_meta: rec.preview_meta
+
+    const mapped = jobStatus.status === 'running' ? 'processing' : 'queued';
+    await updatePreviewState(projectId, {
+      preview_status: mapped,
+      updated_at: new Date().toISOString(),
     });
+
+    return res.json({ ok: true, status: mapped });
   } catch (e) {
-    console.error('[preview web] status error:', e.message);
-    res.status(500).json({ ok: false, error: String(e.message || e) });
+    console.error('[preview] status error', e);
+    return res.status(500).json({ ok: false, error: 'server_error' });
   }
 });
 
