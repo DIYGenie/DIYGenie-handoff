@@ -1,0 +1,60 @@
+Perfect — going with **Option A (deploy to prod)**. Here’s a single, tight prompt for Agent 3. Paste this into your **DIY-genie-webhooks** Replit chat.
+
+---
+
+**COPY → Replit Agent 3 (DIY-genie-webhooks)**
+
+Deploy the new **measurement** feature to **production** (`https://api.diygenieapp.com`).
+
+**Do this exactly:**
+
+1. **Routes**
+
+   * Ensure these Express routes exist and are mounted under the same `/api` root as other project routes:
+
+     * `POST /api/projects/:projectId/scans/:scanId/measure`
+     * `GET  /api/projects/:projectId/scans/:scanId/measure/status`
+   * Authorization: require the authenticated user; verify `room_scans.project_id = :projectId` and `projects.user_id = auth user`. 404 if not found/owned, 403 if owned by someone else.
+   * Behavior:
+
+     * `POST .../measure`: accept optional `{ roi }` in JSON; set `measure_status='done'` and `measure_result={ px_per_in: 15.0, width_in: 48, height_in: 30, roi }` (stub); return `{ ok:true, status:'done' }`.
+     * `GET .../measure/status`: return `409 { ok:false, error:'not_ready' }` if no result; else `200 { ok:true, status:'done', result }`.
+
+2. **DB migration (prod Supabase used by this service)**
+
+   * Add columns if missing:
+
+     ```
+     ALTER TABLE room_scans
+     ADD COLUMN IF NOT EXISTS measure_status TEXT,
+     ADD COLUMN IF NOT EXISTS measure_result JSONB;
+     ```
+   * Run safely/idempotently.
+
+3. **Env & wiring**
+
+   * Use the existing prod Supabase URL/anon/service keys already configured for this service.
+   * Confirm CORS allows the mobile app origins and `content-type: application/json`.
+
+4. **Build & deploy**
+
+   * Ship the updated service to the **production target** that backs `api.diygenieapp.com`.
+
+5. **Smoke test against PROD**
+
+   * Create a temporary **project** and **scan** via existing prod endpoints (or use an existing owned pair), capture `projectId` and `scanId`.
+   * Call:
+
+     * `POST https://api.diygenieapp.com/api/projects/{projectId}/scans/{scanId}/measure` with a sample `{ roi: { x:0.25, y:0.70, w:0.34, h:0.23 } }`.
+     * `GET  https://api.diygenieapp.com/api/projects/{projectId}/scans/{scanId}/measure/status`.
+   * Return the **actual HTTP status + JSON** for both calls.
+
+6. **Docs**
+
+   * Update `API_MAP.md` with both endpoints (request/response examples) and commit.
+
+Report back with:
+
+* Confirmed deploy SHA and environment.
+* The exact curl you used and their responses.
+* Any diffs you applied (files/lines) for routes and app mount.

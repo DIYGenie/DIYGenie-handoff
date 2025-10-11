@@ -541,43 +541,48 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 
 ### POST /api/projects/:projectId/scans/:scanId/measure
 - **Handler file:** `index.js:1287`
-- **Auth:** Verifies scan belongs to user via room_scans.project_id → projects.user_id join
+- **Auth:** Requires authenticated user via `user_id` in request body/query. Verifies scan belongs to project and user owns project
 - **Request headers:** `Content-Type: application/json`
-- **Query params:** -
+- **Query params:** `user_id` (UUID, optional if in body)
 - **Path params:** `projectId` (project UUID), `scanId` (scan UUID)
 - **Request body (JSON, optional):**
 ```json
 {
-  "roi": { "x": 100, "y": 200, "width": 300, "height": 400 }
+  "user_id": "550e8400-e29b-41d4-a716-446655440001",
+  "roi": { "x": 0.25, "y": 0.70, "w": 0.34, "h": 0.23 }
 }
 ```
 - **Response (success):** `200 { ok: true, status: "done" }`
 - **Response (errors):**
-  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist or doesn't belong to project
+  - `403 { ok: false, error: "no_user" }` - Missing user_id
+  - `403 { ok: false, error: "forbidden" }` - Scan owned by different user
+  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist
   - `500 { ok: false, error: "error_message" }` - Server error
-- **Side effects:** Updates `room_scans` table (measure_status='done', measure_result, roi if provided)
+- **Side effects:** Updates `room_scans` table (measure_status='done', measure_result with ROI, roi column if provided)
 - **Logs/phrases:** `[measure web] start`, `[measure web] update complete`
-- **Stub behavior:** Immediately sets measure_status='done' with result `{ px_per_in: 15.0, width_in: 48, height_in: 30 }`
+- **Stub behavior:** Immediately sets measure_status='done' with result `{ px_per_in: 15.0, width_in: 48, height_in: 30, roi: {...} }`
 
 **Sample:**
 ```bash
-curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/scans/660e8400-e29b-41d4-a716-446655440002/measure \
+curl -X POST https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440001/scans/660e8400-e29b-41d4-a716-446655440002/measure \
   -H 'Content-Type: application/json' \
-  -d '{"roi": {"x": 100, "y": 200, "width": 300, "height": 400}}'
+  -d '{"user_id":"550e8400-e29b-41d4-a716-446655440001","roi":{"x":0.25,"y":0.70,"w":0.34,"h":0.23}}'
 ```
 
 ---
 
 ### GET /api/projects/:projectId/scans/:scanId/measure/status
-- **Handler file:** `index.js:1340`
-- **Auth:** Verifies scan belongs to user via room_scans.project_id → projects.user_id join
+- **Handler file:** `index.js:1357`
+- **Auth:** Requires authenticated user via `user_id` in request body/query. Verifies scan belongs to project and user owns project
 - **Request headers:** -
-- **Query params:** -
+- **Query params:** `user_id` (UUID, required)
 - **Path params:** `projectId` (project UUID), `scanId` (scan UUID)
 - **Request body:** -
-- **Response (success):** `200 { ok: true, status: "done", result: { px_per_in: 15.0, width_in: 48, height_in: 30 } }`
+- **Response (success):** `200 { ok: true, status: "done", result: { px_per_in: 15.0, width_in: 48, height_in: 30, roi: {...} } }`
 - **Response (errors):**
-  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist or doesn't belong to project
+  - `403 { ok: false, error: "no_user" }` - Missing user_id
+  - `403 { ok: false, error: "forbidden" }` - Scan owned by different user
+  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist
   - `409 { ok: false, error: "not_ready" }` - Measurement not yet available
   - `500 { ok: false, error: "error_message" }` - Server error
 - **Side effects:** Reads from `room_scans` table
@@ -585,7 +590,7 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 
 **Sample:**
 ```bash
-curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/scans/660e8400-e29b-41d4-a716-446655440002/measure/status
+curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440001/scans/660e8400-e29b-41d4-a716-446655440002/measure/status?user_id=550e8400-e29b-41d4-a716-446655440001"
 ```
 
 ---

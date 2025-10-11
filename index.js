@@ -1286,12 +1286,18 @@ app.post('/api/projects/:projectId/scans/:scanId/measure', async (req, res) => {
     const { projectId, scanId } = req.params;
     const { roi } = req.body;
     
-    console.log('[measure web] start', { projectId, scanId });
+    // Get authenticated user
+    const userId = resolveUserIdFrom(req);
+    if (!userId) {
+      return res.status(403).json({ ok: false, error: 'no_user' });
+    }
     
-    // Verify scan belongs to the specified project
+    console.log('[measure web] start', { projectId, scanId, userId });
+    
+    // Verify scan belongs to project and user owns the project
     const { data: scan, error: scanError } = await supabase
       .from('room_scans')
-      .select('id, project_id')
+      .select('id, project_id, projects!inner(user_id)')
       .eq('id', scanId)
       .eq('project_id', projectId)
       .maybeSingle();
@@ -1301,22 +1307,33 @@ app.post('/api/projects/:projectId/scans/:scanId/measure', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'scan_not_found' });
     }
     
-    // Prepare update data
-    const updateData = {
-      measure_status: 'done',
-      measure_result: {
-        px_per_in: 15.0,
-        width_in: 48,
-        height_in: 30
-      }
+    // Check if user owns the project
+    if (scan.projects.user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    
+    // Prepare measurement result with ROI
+    const measureResult = {
+      px_per_in: 15.0,
+      width_in: 48,
+      height_in: 30
     };
     
-    // Include roi if provided
+    if (roi !== undefined) {
+      measureResult.roi = roi;
+    }
+    
+    // Update scan with measurement result
+    const updateData = {
+      measure_status: 'done',
+      measure_result: measureResult
+    };
+    
+    // Also update roi column if provided
     if (roi !== undefined) {
       updateData.roi = roi;
     }
     
-    // Update scan with measurement result
     const { error: updateError } = await supabase
       .from('room_scans')
       .update(updateData)
@@ -1338,12 +1355,18 @@ app.get('/api/projects/:projectId/scans/:scanId/measure/status', async (req, res
   try {
     const { projectId, scanId } = req.params;
     
-    console.log('[measure web] status check', { projectId, scanId });
+    // Get authenticated user
+    const userId = resolveUserIdFrom(req);
+    if (!userId) {
+      return res.status(403).json({ ok: false, error: 'no_user' });
+    }
+    
+    console.log('[measure web] status check', { projectId, scanId, userId });
     
     // Verify scan belongs to project and get measurement data
     const { data: scan, error } = await supabase
       .from('room_scans')
-      .select('measure_status, measure_result')
+      .select('measure_status, measure_result, projects!inner(user_id)')
       .eq('id', scanId)
       .eq('project_id', projectId)
       .maybeSingle();
@@ -1351,6 +1374,11 @@ app.get('/api/projects/:projectId/scans/:scanId/measure/status', async (req, res
     if (error) throw error;
     if (!scan) {
       return res.status(404).json({ ok: false, error: 'scan_not_found' });
+    }
+    
+    // Check if user owns the project
+    if (scan.projects.user_id !== userId) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
     }
     
     // Check if measurement is ready
