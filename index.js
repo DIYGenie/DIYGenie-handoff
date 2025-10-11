@@ -77,6 +77,23 @@ async function getProjectById(id) {
   return data || null;
 }
 
+// Helper to get project for user (with ownership check)
+async function getProjectForUser(projectId, userId) {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id, user_id, preview_status, preview_job_id, preview_url, input_image_url')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (error || !data) return null;
+  if (data.user_id !== userId) return null;
+  return data;
+}
+
+// Helper to update preview state
+async function updatePreviewState(projectId, patch) {
+  return supabase.from('projects').update(patch).eq('id', projectId).select('id').maybeSingle();
+}
+
 // Normalize helpers
 function norm(x, fallback = '') { 
   return (x ?? fallback).toString().trim(); 
