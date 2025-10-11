@@ -1,0 +1,91 @@
+Update ProjectDetails to prefer AI preview image, load plan immediately, and keep non-preview path working
+
+Please make the following changes in the mobile app:
+
+Single hero image logic (no duplicates)
+
+In ProjectDetails.tsx, replace the top image section with this precedence:
+
+If project.preview_url exists: show PreviewHeroCard (with “Save to Photos” button).
+
+Else if there’s a latest saved scan (from room_scans or savedScan): show ScanHeroCard (with optional save).
+
+Else: show nothing.
+
+Remove/disable any second “Scan info”/placeholder card so only one hero card is visible.
+
+Wire Decor8 polling to UI state
+
+If project.preview_status is 'queued' or 'processing' (or equivalent), start polling:
+
+Poll GET /api/projects/:id/preview/status?user_id=<uid> every 2s.
+
+On { ok:true, status:'done', url }:
+
+Update local project state with { preview_status:'done', preview_url:url }
+
+Stop polling.
+
+Ensure this polling cleans up on unmount/focus changes (use useEffect + abort pattern).
+
+Add console logs:
+
+[preview] polling…
+
+[preview] ready { url }
+
+[preview] stop
+
+Plan renders immediately (no reopen needed)
+
+After plan build completes and on first mount of ProjectDetails:
+
+Always call the existing fetchProjectPlanMarkdown(project.id) (or the current helper) and parse it.
+
+If you currently rely on cached plan causing stale UI, force a refresh by:
+
+Either re-fetching when project.status transitions to ready,
+
+Or bumping a planVersion state key to force a re-render of PlanTabs/DetailedInstructions.
+
+Add defensive UI states:
+
+If plan is building: “Building your plan…” message.
+
+If plan is ready but parsing: “Loading plan…”
+
+If plan loaded: render tabs/grid immediately (no extra navigation required).
+
+Logs:
+
+[plan] fetch
+
+[plan] parsed { sections: {materials:N, tools:N, cuts:N, steps:N} }
+
+Non-preview users still see scans
+
+Keep the non-preview path working: if no preview_url, still show the scan hero card and everything else functions the same (no error banners about missing preview).
+
+Navigation + cleanups
+
+Do not navigate away during preview polling. Stay on ProjectDetails and update in place.
+
+Remove any remaining “Waiting/Loading screen” routes for this flow (we replaced them with inline loading).
+
+Ensure the Back button from ProjectDetails still returns to Projects list (existing smart back hook).
+
+QA console markers
+
+Add clear logs at key points:
+
+[details] hero = preview|scan|none
+
+[details] plan state = building|loading|ready
+
+When done, show me the edited snippets for:
+
+The hero image section in ProjectDetails.tsx
+
+The preview polling effect
+
+The plan fetch/parse effect
