@@ -1,0 +1,127 @@
+// --- Admin Cleanup Endpoint -----------------------------------------------
+// ENV: set ADMIN_TOKEN to a long random string
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
+
+app.delete('/api/admin/purge-test-data', async (req, res) => {
+  try {
+    // ---- Auth guard
+    const provided =
+      req.headers['x-admin-token'] ||
+      req.query.admin_token ||
+      req.body?.admin_token;
+    if (!ADMIN_TOKEN || provided !== ADMIN_TOKEN) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+
+    // ---- Controls (optional)
+    const days = Number(req.query.days ?? 9999); // delete drafts older than N days
+    const dryRun = String(req.query.dryRun ?? 'false') === 'true';
+
+    // ---- Find candidate projects
+    const cutoffISO = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    // Note: adjust OR conditions to your taste
+    const { data: projects, error: projErr } = await supabase
+      .from('projects')
+      .select('id, name, user_id, status, created_at')
+      .or('name.ilike.Test%,name.ilike.%test%')
+      .limit(1000);
+
+    if (projErr) throw projErr;
+
+    // Also include very old drafts (noise from testing)
+    const { data: oldDrafts, error: draftErr } = await supabase
+      .from('projects')
+      .select('id, name, user_id, status, created_at')
+      .eq('status', 'draft')
+      .lt('created_at', cutoffISO)
+      .limit(1000);
+
+    if (draftErr) throw draftErr;
+
+    // De-dupe
+    const byId = new Map();
+    [...(projects ?? []), ...(oldDrafts ?? [])].forEach(p => byId.set(p.id, p));
+    const toDelete = [...byId.values()];
+    if (!toDelete.length) {
+      return res.json({ ok: true, message: 'nothing to delete', deleted_projects: 0, deleted_scans: 0, deleted_files: 0, dryRun });
+    }
+
+    // ---- Collect related scans
+    const ids = toDelete.map(p => p.id);
+    const { data: scans, error: scanErr } = await supabase
+      .from('room_scans')
+      .select('id, project_id, user_id, image_url')
+      .in('project_id', ids)
+      .limit(5000);
+    if (scanErr) throw scanErr;
+
+    // Extract storage paths from public URLs:
+    // .../storage/v1/object/public/room-scans/<PATH>
+    const extractPath = (url) => {
+      if (!url) return null;
+      const marker = '/room-scans/';
+      const i = url.indexOf(marker);
+      return i >= 0 ? url.slice(i + marker.length) : null;
+    };
+    const paths = (scans ?? [])
+      .map(s => extractPath(s.image_url))
+      .filter(Boolean);
+
+    // ---- DRY RUN short-circuit
+    if (dryRun) {
+      return res.json({
+        ok: true,
+        dryRun: true,
+        will_delete_projects: toDelete.length,
+        will_delete_scans: scans?.length || 0,
+        will_delete_files: paths.length,
+        sample_projects: toDelete.slice(0, 3),
+        sample_paths: paths.slice(0, 5),
+      });
+    }
+
+    // ---- Delete storage files in chunks of 100
+    let deletedFiles = 0;
+    const bucket = supabase.storage.from('room-scans');
+    for (let i = 0; i < paths.length; i += 100) {
+      const chunk = paths.slice(i, i + 100);
+      const { data: rem, error: remErr } = await bucket.remove(chunk);
+      if (remErr) throw remErr;
+      deletedFiles += rem?.length || chunk.length;
+    }
+
+    // ---- Delete dependent rows (order matters if FKs aren’t cascading)
+    // Plans / Previews (if you have these tables)
+    try {
+      await supabase.from('plans').delete().in('project_id', ids);
+    } catch {}
+    try {
+      await supabase.from('previews').delete().in('project_id', ids);
+    } catch {}
+
+    // room_scans
+    const { error: delScansErr } = await supabase
+      .from('room_scans')
+      .delete()
+      .in('project_id', ids);
+    if (delScansErr) throw delScansErr;
+
+    // projects
+    const { error: delProjErr } = await supabase
+      .from('projects')
+      .delete()
+      .in('id', ids);
+    if (delProjErr) throw delProjErr;
+
+    return res.json({
+      ok: true,
+      deleted_projects: ids.length,
+      deleted_scans: scans?.length || 0,
+      deleted_files: deletedFiles,
+    });
+  } catch (err) {
+    console.error('[admin purge] error', err);
+    return res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
