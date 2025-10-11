@@ -176,15 +176,16 @@ Transitions triggered by explicit API calls, not automatic
 ## Recent Updates
 
 ### October 11, 2025
-**Minimal Preview Endpoints**
-- Added `POST /api/projects/:projectId/preview` - Trigger preview generation with optional ROI
-- Added `GET /api/projects/:projectId/preview/status` - Check preview status
-- Stub implementation returns immediate result with placeholder image: `https://images.unsplash.com/photo-1524758631624-e2822e304c36?w=1200`
-- Auth: Uses explicit separate queries to verify project ownership (no embedded Supabase selects)
-- Migration: `migrations/add_preview_columns.sql` adds preview_status, preview_url, preview_meta to projects
-- Test: `tests/preview.test.sh` for endpoint validation
-- Mirrors measure endpoint pattern for consistency
-- Disabled legacy preview endpoint (line 879) to avoid route conflicts
+**Real Decor8 AI Integration for Preview Generation**
+- Migrated from stub to production Decor8 API integration
+- Added `POST /api/projects/:projectId/preview/start` - Starts async preview generation job (returns 202 with jobId)
+- Added `GET /api/projects/:projectId/preview/status` - Polls job status and auto-updates DB when done
+- Migration: `migrations/add_preview_job_id.sql` adds preview_job_id column to projects table
+- Background polling pattern: Client polls status endpoint, server fetches Decor8 job status and updates DB
+- Status flow: queued → processing → done (or error)
+- Helper functions: `callDecor8Status()`, `getProjectForUser()`, `updatePreviewState()`
+- Auth: Uses getProjectForUser helper with ownership verification
+- Removed debug endpoint `/debug/decor8` after successful verification
 
 **Measurement Endpoints Fix**
 - Fixed PostgREST "more than one relationship" error by replacing embedded queries with explicit separate queries
