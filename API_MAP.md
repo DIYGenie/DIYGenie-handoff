@@ -541,7 +541,7 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 
 ### POST /api/projects/:projectId/scans/:scanId/measure
 - **Handler file:** `index.js:1287`
-- **Auth:** Requires authenticated user via `user_id` in request body/query. Verifies scan belongs to project and user owns project
+- **Auth:** Requires authenticated user via `user_id` in request body/query. Uses two explicit queries to verify scan→project and project→user ownership
 - **Request headers:** `Content-Type: application/json`
 - **Query params:** `user_id` (UUID, optional if in body)
 - **Path params:** `projectId` (project UUID), `scanId` (scan UUID)
@@ -554,11 +554,13 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 ```
 - **Response (success):** `200 { ok: true, status: "done" }`
 - **Response (errors):**
-  - `403 { ok: false, error: "no_user" }` - Missing user_id
+  - `400 { ok: false, error: "user_id required" }` - Missing user_id
+  - `400 { ok: false, error: "projectId and scanId required" }` - Missing path params
   - `403 { ok: false, error: "forbidden" }` - Scan owned by different user
-  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist
+  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist or doesn't belong to project
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
   - `500 { ok: false, error: "error_message" }` - Server error
-- **Side effects:** Updates `room_scans` table (measure_status='done', measure_result with ROI, roi column if provided)
+- **Side effects:** Updates `room_scans` table (measure_status='done', measure_result with ROI)
 - **Logs/phrases:** `[measure web] start`, `[measure web] update complete`
 - **Stub behavior:** Immediately sets measure_status='done' with result `{ px_per_in: 15.0, width_in: 48, height_in: 30, roi: {...} }`
 
@@ -572,18 +574,20 @@ curl -X POST https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-44
 ---
 
 ### GET /api/projects/:projectId/scans/:scanId/measure/status
-- **Handler file:** `index.js:1357`
-- **Auth:** Requires authenticated user via `user_id` in request body/query. Verifies scan belongs to project and user owns project
+- **Handler file:** `index.js:1355`
+- **Auth:** Requires authenticated user via `user_id` in query params. Uses three explicit queries to verify scan→project, project→user ownership, and read measurement
 - **Request headers:** -
 - **Query params:** `user_id` (UUID, required)
 - **Path params:** `projectId` (project UUID), `scanId` (scan UUID)
 - **Request body:** -
 - **Response (success):** `200 { ok: true, status: "done", result: { px_per_in: 15.0, width_in: 48, height_in: 30, roi: {...} } }`
 - **Response (errors):**
-  - `403 { ok: false, error: "no_user" }` - Missing user_id
+  - `400 { ok: false, error: "user_id required" }` - Missing user_id
+  - `400 { ok: false, error: "projectId and scanId required" }` - Missing path params
   - `403 { ok: false, error: "forbidden" }` - Scan owned by different user
-  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist
-  - `409 { ok: false, error: "not_ready" }` - Measurement not yet available
+  - `404 { ok: false, error: "scan_not_found" }` - Scan doesn't exist or doesn't belong to project
+  - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
+  - `409 { ok: false, error: "not_ready" }` - Measurement not yet available (status not 'done')
   - `500 { ok: false, error: "error_message" }` - Server error
 - **Side effects:** Reads from `room_scans` table
 - **Logs/phrases:** `[measure web] status check`, `[measure web] status error`

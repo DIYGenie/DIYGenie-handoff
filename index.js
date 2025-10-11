@@ -1284,59 +1284,57 @@ app.post('/api/projects/:id/progress', async (req, res) => {
 app.post('/api/projects/:projectId/scans/:scanId/measure', async (req, res) => {
   try {
     const { projectId, scanId } = req.params;
-    const { roi } = req.body;
-    
-    // Get authenticated user
     const userId = resolveUserIdFrom(req);
+    
+    // Validate inputs
     if (!userId) {
-      return res.status(403).json({ ok: false, error: 'no_user' });
+      return res.status(400).json({ ok: false, error: 'user_id required' });
+    }
+    if (!projectId || !scanId) {
+      return res.status(400).json({ ok: false, error: 'projectId and scanId required' });
     }
     
     console.log('[measure web] start', { projectId, scanId, userId });
     
-    // Verify scan belongs to project and user owns the project
+    // Query 1: Verify scan exists and belongs to project
     const { data: scan, error: scanError } = await supabase
       .from('room_scans')
-      .select('id, project_id, projects!inner(user_id)')
+      .select('id, project_id')
       .eq('id', scanId)
       .eq('project_id', projectId)
-      .maybeSingle();
+      .single();
     
-    if (scanError) throw scanError;
-    if (!scan) {
+    if (scanError || !scan) {
       return res.status(404).json({ ok: false, error: 'scan_not_found' });
     }
     
-    // Check if user owns the project
-    if (scan.projects.user_id !== userId) {
+    // Query 2: Verify user owns the project
+    const { data: proj, error: projError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', projectId)
+      .single();
+    
+    if (projError || !proj) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    if (proj.user_id !== userId) {
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
     
-    // Prepare measurement result with ROI
-    const measureResult = {
-      px_per_in: 15.0,
-      width_in: 48,
-      height_in: 30
-    };
-    
-    if (roi !== undefined) {
-      measureResult.roi = roi;
-    }
-    
     // Update scan with measurement result
-    const updateData = {
-      measure_status: 'done',
-      measure_result: measureResult
-    };
-    
-    // Also update roi column if provided
-    if (roi !== undefined) {
-      updateData.roi = roi;
-    }
-    
     const { error: updateError } = await supabase
       .from('room_scans')
-      .update(updateData)
+      .update({
+        measure_status: 'done',
+        measure_result: {
+          px_per_in: 15.0,
+          width_in: 48,
+          height_in: 30,
+          roi: req.body?.roi ?? null
+        }
+      })
       .eq('id', scanId);
     
     if (updateError) throw updateError;
@@ -1354,42 +1352,63 @@ app.post('/api/projects/:projectId/scans/:scanId/measure', async (req, res) => {
 app.get('/api/projects/:projectId/scans/:scanId/measure/status', async (req, res) => {
   try {
     const { projectId, scanId } = req.params;
-    
-    // Get authenticated user
     const userId = resolveUserIdFrom(req);
+    
+    // Validate inputs
     if (!userId) {
-      return res.status(403).json({ ok: false, error: 'no_user' });
+      return res.status(400).json({ ok: false, error: 'user_id required' });
+    }
+    if (!projectId || !scanId) {
+      return res.status(400).json({ ok: false, error: 'projectId and scanId required' });
     }
     
     console.log('[measure web] status check', { projectId, scanId, userId });
     
-    // Verify scan belongs to project and get measurement data
-    const { data: scan, error } = await supabase
+    // Query 1: Verify scan exists and belongs to project
+    const { data: scan, error: scanError } = await supabase
       .from('room_scans')
-      .select('measure_status, measure_result, projects!inner(user_id)')
+      .select('id, project_id')
       .eq('id', scanId)
       .eq('project_id', projectId)
-      .maybeSingle();
+      .single();
     
-    if (error) throw error;
-    if (!scan) {
+    if (scanError || !scan) {
       return res.status(404).json({ ok: false, error: 'scan_not_found' });
     }
     
-    // Check if user owns the project
-    if (scan.projects.user_id !== userId) {
+    // Query 2: Verify user owns the project
+    const { data: proj, error: projError } = await supabase
+      .from('projects')
+      .select('id, user_id')
+      .eq('id', projectId)
+      .single();
+    
+    if (projError || !proj) {
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
+    }
+    
+    if (proj.user_id !== userId) {
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
     
+    // Query 3: Read measurement status and result
+    const { data: rec, error: recError } = await supabase
+      .from('room_scans')
+      .select('measure_status, measure_result')
+      .eq('id', scanId)
+      .single();
+    
+    if (recError) throw recError;
+    
     // Check if measurement is ready
-    if (!scan.measure_status || !scan.measure_result) {
+    if (rec.measure_status !== 'done') {
       return res.status(409).json({ ok: false, error: 'not_ready' });
     }
     
     res.json({ 
       ok: true, 
-      status: scan.measure_status, 
-      result: scan.measure_result 
+      status: 'done', 
+      result: rec.measure_result 
     });
   } catch (e) {
     console.error('[measure web] status error:', e.message);

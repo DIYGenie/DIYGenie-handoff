@@ -1,0 +1,81 @@
+Task: Fix measurement endpoints by removing ambiguous Supabase embeds and validating ownership with two explicit queries. Do NOT use `.select('..., projects(...)')`. Keep the same routes and responses, but change the data access so PostgREST never guesses the relationship.
+
+Files to edit:
+- index.js (or src/index.ts if present; otherwise index.js)
+
+Edits (TypeScript-y JS is fine; the project already uses JS):
+1) In POST /api/projects/:projectId/scans/:scanId/measure
+   - Extract { projectId, scanId } from params and user_id from body or query.
+   - Hard-check inputs; if missing return 400.
+   - Query 1 (scan): 
+        const scan = await supabase
+          .from('room_scans')
+          .select('id, project_id')
+          .eq('id', scanId)
+          .eq('project_id', projectId)
+          .single();
+        If error or no data → return 404.
+   - Query 2 (project owner):
+        const proj = await supabase
+          .from('projects')
+          .select('id, user_id')
+          .eq('id', projectId)
+          .single();
+        If error or no data → return 404.
+        If proj.data.user_id !== userId → return 403.
+   - Upsert measurement on room_scans:
+        await supabase
+          .from('room_scans')
+          .update({
+            measure_status: 'done',
+            measure_result: {
+              px_per_in: 15.0,
+              width_in: 48,
+              height_in: 30,
+              roi: req.body?.roi ?? null
+            }
+          })
+          .eq('id', scanId);
+   - Return 200 JSON: { ok: true, status: 'done' }.
+
+2) In GET /api/projects/:projectId/scans/:scanId/measure/status
+   - Extract user_id from query. If missing → 400.
+   - Repeat the same two queries (scan, then project owner) exactly as above (no embeds).
+   - Read measure_status and measure_result from room_scans:
+        const rec = await supabase
+          .from('room_scans')
+          .select('measure_status, measure_result')
+          .eq('id', scanId)
+          .single();
+        If rec.data?.measure_status !== 'done' → return 409 { ok:false, error:'not_ready' }.
+        Else return 200 { ok:true, status:'done', result: rec.data.measure_result }.
+
+3) Do not change any other endpoints. Do not add new tables. Leave CORS as-is.
+
+4) Apply prettier or consistent formatting.
+
+Deliverables:
+- Committed changes to index.js only (plus any import fix).
+- Brief summary of what changed.
+- Start the server.
+After Agent 3 finishes, run these production tests
+Replace nothing—these use your real IDs:
+
+bash
+Copy code
+# Trigger measurement
+curl -X POST "https://api.diygenieapp.com/api/projects/194e1c7e-f156-457f-adc5-37d642b5049b/scans/95359236-72ff-4ff6-bfd8-725e0a6f482c/measure" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id":"99198c4b-8470-49e2-895c-75593c5aa181",
+    "roi":{"x":0.25,"y":0.70,"w":0.34,"h":0.23}
+  }'
+
+# Check status
+curl "https://api.diygenieapp.com/api/projects/194e1c7e-f156-457f-adc5-37d642b5049b/scans/95359236-72ff-4ff6-bfd8-725e0a6f482c/measure/status?user_id=99198c4b-8470-49e2-895c-75593c5aa181"
+Expected:
+
+First call → 200 { "ok": true, "status": "done" }
+
+Second call → 200 { "ok": true, "status": "done", "result": { ... } }
+
