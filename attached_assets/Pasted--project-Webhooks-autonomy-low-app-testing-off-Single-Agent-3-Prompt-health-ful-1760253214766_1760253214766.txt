@@ -1,0 +1,187 @@
+**project:** Webhooks
+**autonomy:** low
+**app testing:** off
+
+**Single Agent-3 Prompt — `/health/full` + flags (stub/live) + structured logs**
+
+> Add a robust health endpoint and structured logging without breaking existing routes. No curls, no token swaps.
+
+**Edits (additive, minimal diffs)**
+
+1. **Create `utils/logger.js`** — small structured logger + redaction
+
+```js
+// utils/logger.js
+const SENSITIVE_KEYS = ['DECOR8_API_KEY','OPENAI_API_KEY','DATABASE_URL','SUPABASE_SERVICE_ROLE_KEY'];
+
+function redact(val='') {
+  if (!val) return val;
+  try {
+    const u = new URL(val);
+    const host = u.host || 'hidden';
+    return `***@${host}`;
+  } catch {
+    if (val.length <= 6) return '***';
+    return `${val.slice(0,2)}***${val.slice(-2)}`;
+  }
+}
+
+function maskEnv(env = process.env) {
+  const out = {};
+  for (const k of Object.keys(env)) {
+    if (SENSITIVE_KEYS.includes(k)) out[k] = '***';
+  }
+  if (env.DATABASE_URL) out.DATABASE_URL = redact(env.DATABASE_URL);
+  if (env.DECOR8_BASE_URL) out.DECOR8_BASE_URL = env.DECOR8_BASE_URL.startsWith('stub') ? 'stub' : env.DECOR8_BASE_URL;
+  return out;
+}
+
+function log(event, payload = {}) {
+  // single line JSON for easier parsing
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...payload }));
+}
+
+module.exports = { log, maskEnv, redact };
+```
+
+2. **Create `routes/health.js`** — liveness, readiness, full diagnostics
+
+```js
+// routes/health.js
+const express = require('express');
+const router = express.Router();
+const { Pool } = require('pg');
+const pkg = require('../package.json');
+const { maskEnv, log } = require('../utils/logger');
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+function modeFlags() {
+  const decor8Mode = !process.env.DECOR8_BASE_URL || process.env.DECOR8_BASE_URL.startsWith('stub') ? 'stub' : 'live';
+  const openaiMode = process.env.OPENAI_API_KEY ? 'live' : 'stub';
+  return { decor8: decor8Mode, openai: openaiMode };
+}
+
+router.get('/health', (_req, res) => {
+  res.json({ ok: true, status: 'healthy', version: pkg.version, uptime_s: Math.floor(process.uptime()) });
+});
+
+router.get('/health/live', (_req, res) => {
+  res.json({ ok: true, status: 'live' });
+});
+
+router.get('/health/ready', async (_req, res) => {
+  const checks = [];
+  // DB check
+  try {
+    const { rows } = await pool.query('select 1 as ok');
+    checks.push({ name: 'db', ok: rows?.[0]?.ok === 1 });
+  } catch (e) {
+    checks.push({ name: 'db', ok: false, err: String(e.message || e) });
+  }
+  // Env presence
+  checks.push({ name: 'env.DATABASE_URL', ok: !!process.env.DATABASE_URL });
+  checks.push({ name: 'env.DECOR8_BASE_URL', ok: !!process.env.DECOR8_BASE_URL });
+  // We don’t ping external services here to keep it fast/stable.
+
+  const allOk = checks.every(c => c.ok);
+  if (!allOk) log('health.ready.fail', { checks });
+  res.status(allOk ? 200 : 503).json({ ok: allOk, checks });
+});
+
+router.get('/health/full', async (_req, res) => {
+  const started = Date.now();
+  const checks = [];
+
+  // DB roundtrip
+  try {
+    const { rows } = await pool.query('select now() as now');
+    checks.push({ name: 'db.now', ok: !!rows?.[0]?.now, now: rows?.[0]?.now });
+  } catch (e) {
+    checks.push({ name: 'db.now', ok: false, err: String(e.message || e) });
+  }
+
+  // Versions + modes
+  const version = {
+    service: pkg.name || 'diy-genie-webhooks',
+    version: pkg.version || '0.0.0',
+    node: process.version,
+  };
+  const modes = modeFlags();
+
+  // Env summary (redacted)
+  const env = maskEnv();
+
+  const payload = {
+    ok: checks.every(c => c.ok),
+    checks,
+    modes,
+    version,
+    uptime_s: Math.floor(process.uptime()),
+    started_at: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    duration_ms: Date.now() - started,
+    env_summary: {
+      DECOR8_BASE_URL: env.DECOR8_BASE_URL || 'unset',
+      DATABASE_URL: env.DATABASE_URL || 'unset',
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY ? 'set' : 'unset'
+    }
+  };
+
+  log('health.full', { ok: payload.ok, modes, duration_ms: payload.duration_ms });
+  res.status(payload.ok ? 200 : 503).json(payload);
+});
+
+module.exports = router;
+```
+
+3. **Wire it up in `index.js`** — mount router & tighten error logging
+
+```js
+// index.js (or main server)
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+// ... existing routes ...
+const healthRouter = require('./routes/health');
+app.use('/', healthRouter);
+
+// Optional: structured error handler (keep existing behavior, but stringify)
+app.use((err, _req, res, _next) => {
+  try {
+    console.error(JSON.stringify({ ts: new Date().toISOString(), event: 'error.unhandled', message: err.message, stack: process.env.NODE_ENV === 'production' ? undefined : err.stack }));
+  } catch {
+    console.error(err);
+  }
+  res.status(500).json({ ok: false, error: 'internal_error' });
+});
+
+// app.listen(...) stays as-is
+```
+
+4. **Acceptance (what you should see)**
+
+* Hitting `GET /health` returns `{ ok: true, status: "healthy", version, uptime_s }`.
+* `GET /health/ready` returns `200` if DB + env pass, else `503` with `checks`.
+* `GET /health/full` returns JSON with:
+
+  * `modes: { decor8: "stub|live", openai: "stub|live" }`
+  * `checks` array including `db.now`
+  * `version` {service, version, node}
+  * `env_summary` (redacted/boolean flags, no secrets)
+  * `ok: true|false`, `uptime_s`, `duration_ms`
+* Server console prints single-line JSON logs:
+
+  * `{"event":"health.full","ok":true,"modes":{"decor8":"live","openai":"live"},"duration_ms":...}`
+
+5. **Guardrails**
+
+* Do **not** remove your existing `/health` (kept for compatibility).
+* No external pings (Decor8/OpenAI) to avoid slow/fragile health checks.
+* No secrets printed anywhere.
+
+**Stop after implementing.**
+Tell me:
+
+* The returned `modes` from `/health/full`.
+* Whether `/health/ready` is `200` or `503` and which check failed if any.

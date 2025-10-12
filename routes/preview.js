@@ -1,12 +1,13 @@
 // routes/preview.js
-const express = require('express');
+import express from 'express';
+import { createClient } from '@supabase/supabase-js';
+import { submitPreviewJob, fetchPreviewStatus, isStub } from '../services/decor8Client.js';
+
 const router = express.Router();
-const { createClient } = require('@supabase/supabase-js');
-const { submitPreviewJob, fetchPreviewStatus, isStub } = require('../services/decor8Client');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 async function getProject(projectId) {
@@ -135,4 +136,4 @@ router.get('/selftest/preview/:projectId', async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

@@ -3,6 +3,8 @@ import cors from "cors";
 import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import previewRouter from './routes/preview.js';
+import healthRouter from './routes/health.js';
 
 const app = express();
 app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
@@ -346,14 +348,7 @@ Return a JSON object with this structure:
   return JSON.parse(content);
 }
 
-// --- Health ---
-app.get('/health', (req, res) => res.json({ 
-  ok: true, 
-  status: 'healthy', 
-  suggestions: SUGGESTIONS_PROVIDER,
-  preview: PREVIEW_PROVIDER,
-  plan: PLAN_PROVIDER
-}));
+// --- Root endpoint ---
 app.get('/', (req, res) => res.json({
   message: 'Server is running',
   status: 'ready',
@@ -1973,8 +1968,10 @@ app.get('/billing/portal-return', (req, res) => {
 });
 
 // --- Mount Preview Router ---
-const previewRouter = require('./routes/preview');
 app.use('/', previewRouter);
+
+// --- Mount Health Router ---
+app.use('/', healthRouter);
 
 // --- Listen ---
 const PORT = process.env.PORT || 5000;

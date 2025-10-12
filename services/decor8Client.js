@@ -1,14 +1,14 @@
 // services/decor8Client.js
-const fetch = require('node-fetch');
+import fetch from 'node-fetch';
 
 const DECOR8_BASE_URL = process.env.DECOR8_BASE_URL || 'stub|decor8';
 const DECOR8_API_KEY   = process.env.DECOR8_API_KEY || '';
 
-function isStub() {
+export function isStub() {
   return !DECOR8_BASE_URL || DECOR8_BASE_URL.startsWith('stub');
 }
 
-async function submitPreviewJob({ imageUrl, prompt, roomType, scalePxPerIn, dimensionsJson }) {
+export async function submitPreviewJob({ imageUrl, prompt, roomType, scalePxPerIn, dimensionsJson }) {
   if (isStub()) {
     const stubId = `stub_${Date.now()}`;
     return { ok: true, jobId: stubId, mode: 'stub' };
@@ -41,7 +41,7 @@ async function submitPreviewJob({ imageUrl, prompt, roomType, scalePxPerIn, dime
   return { ok: true, jobId: data.id || data.job_id || null, raw: data, mode: 'live' };
 }
 
-async function fetchPreviewStatus(jobId) {
+export async function fetchPreviewStatus(jobId) {
   if (isStub()) {
     // Pretend it finishes quickly
     return {
@@ -67,5 +67,3 @@ async function fetchPreviewStatus(jobId) {
   const thumbUrl   = data.thumb_url   || data.result?.thumb || null;
   return { ok: true, status, preview_url: previewUrl, thumb_url: thumbUrl, raw: data };
 }
-
-module.exports = { submitPreviewJob, fetchPreviewStatus, isStub };

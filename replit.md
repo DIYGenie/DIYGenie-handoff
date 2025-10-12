@@ -176,6 +176,17 @@ Transitions triggered by explicit API calls, not automatic
 ## Recent Updates
 
 ### October 12, 2025
+**Health Endpoints & Structured Logging**
+- Created `utils/logger.js` - Structured JSON logger with secret redaction
+- Created `routes/health.js` - Comprehensive health check endpoints
+- Added `GET /health` - Basic health status with version and uptime
+- Added `GET /health/live` - Kubernetes liveness probe
+- Added `GET /health/ready` - Readiness check with DB and env validation
+- Added `GET /health/full` - Full diagnostics with mode flags, version info, and env summary
+- Mode detection: Shows `decor8: stub|live` and `openai: stub|live` based on env vars
+- Structured logging: Single-line JSON logs with timestamp, event, and payload
+- Secret redaction: Masks API keys and sensitive env vars in health responses
+
 **End-to-End Preview Flow with Service Architecture**
 - Created `services/decor8Client.js` - Centralized Decor8 API service with stub fallback
 - Created `routes/preview.js` - Modular preview router with Supabase integration
