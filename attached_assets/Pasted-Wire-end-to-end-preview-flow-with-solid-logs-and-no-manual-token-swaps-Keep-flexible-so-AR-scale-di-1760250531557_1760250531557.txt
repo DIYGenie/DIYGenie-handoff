@@ -1,0 +1,239 @@
+Wire end-to-end preview flow with solid logs and no manual token swaps. Keep flexible so AR scale/dimensions can be forwarded if present.
+
+Do the following edits in diy-genie-webhooks:
+
+Create services/decor8Client.js (new)
+
+Create routes/preview.js (new)
+
+Update main server (e.g., index.js) to mount the router
+
+No curls, no sample tokens; use existing env: DECOR8_BASE_URL, DECOR8_API_KEY, DATABASE_URL
+
+Never break existing routes; additive only
+
+1) services/decor8Client.js
+// services/decor8Client.js
+const fetch = require('node-fetch');
+
+const DECOR8_BASE_URL = process.env.DECOR8_BASE_URL || 'stub|decor8';
+const DECOR8_API_KEY   = process.env.DECOR8_API_KEY || '';
+
+function isStub() {
+  return !DECOR8_BASE_URL || DECOR8_BASE_URL.startsWith('stub');
+}
+
+async function submitPreviewJob({ imageUrl, prompt, roomType, scalePxPerIn, dimensionsJson }) {
+  if (isStub()) {
+    const stubId = `stub_${Date.now()}`;
+    return { ok: true, jobId: stubId, mode: 'stub' };
+  }
+  const url = `${DECOR8_BASE_URL.replace(/\/$/,'')}/preview/jobs`;
+  const payload = {
+    image_url: imageUrl,
+    prompt: prompt || '',
+    room_type: roomType || null,
+    // Forward AR context if available; backend may ignore, we persist anyway.
+    ar_context: {
+      scale_px_per_in: scalePxPerIn ?? null,
+      dimensions: dimensionsJson ?? null,
+    }
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${DECOR8_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`[decor8 submit] ${res.status} ${text}`);
+  }
+  const data = await res.json();
+  // Expect { id, status } or similar; keep flexible
+  return { ok: true, jobId: data.id || data.job_id || null, raw: data, mode: 'live' };
+}
+
+async function fetchPreviewStatus(jobId) {
+  if (isStub()) {
+    // Pretend it finishes quickly
+    return {
+      ok: true,
+      status: 'ready',
+      preview_url: `https://picsum.photos/seed/${jobId}/1600/1200`,
+      thumb_url:  `https://picsum.photos/seed/${jobId}/600/400`,
+      raw: { stub: true }
+    };
+  }
+  const url = `${DECOR8_BASE_URL.replace(/\/$/,'')}/preview/jobs/${encodeURIComponent(jobId)}`;
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${process.env.DECOR8_API_KEY}` }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`[decor8 status] ${res.status} ${text}`);
+  }
+  const data = await res.json();
+  // Normalize plausible fields
+  const status = data.status || data.state || 'processing';
+  const previewUrl = data.preview_url || data.output_url || data.result?.url || null;
+  const thumbUrl   = data.thumb_url   || data.result?.thumb || null;
+  return { ok: true, status, preview_url: previewUrl, thumb_url: thumbUrl, raw: data };
+}
+
+module.exports = { submitPreviewJob, fetchPreviewStatus, isStub };
+
+2) routes/preview.js
+// routes/preview.js
+const express = require('express');
+const router = express.Router();
+const { Pool } = require('pg');
+const { submitPreviewJob, fetchPreviewStatus, isStub } = require('../services/decor8Client');
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+async function getProject(projectId) {
+  const { rows } = await pool.query(
+    `select id, user_id, name, goal, room_type, input_image_url, preview_url, preview_status,
+            scale_px_per_in, dimensions_json, preview_meta
+       from projects where id = $1::uuid`,
+    [projectId]
+  );
+  return rows[0] || null;
+}
+
+async function savePreviewQueued(projectId, jobId, extras = {}) {
+  const meta = { ...(extras || {}), jobId, mode: isStub() ? 'stub' : 'live' };
+  await pool.query(
+    `update projects
+        set preview_status = 'queued',
+            preview_meta   = coalesce(preview_meta,'{}'::jsonb) || $1::jsonb,
+            updated_at     = now()
+      where id = $2::uuid`,
+    [JSON.stringify(meta), projectId]
+  );
+}
+
+async function savePreviewReady(projectId, previewUrl, extras = {}) {
+  const meta = { ...(extras || {}) };
+  await pool.query(
+    `update projects
+        set preview_url    = $1,
+            preview_status  = 'ready',
+            preview_meta    = coalesce(preview_meta,'{}'::jsonb) || $2::jsonb,
+            status          = 'active',
+            updated_at      = now()
+      where id = $3::uuid`,
+    [previewUrl, JSON.stringify(meta), projectId]
+  );
+}
+
+router.post('/preview/decor8', async (req, res) => {
+  try {
+    const { projectId } = req.body || {};
+    if (!projectId) return res.status(400).json({ ok:false, error:'projectId required' });
+
+    const p = await getProject(projectId);
+    if (!p) return res.status(404).json({ ok:false, error:'project not found' });
+    if (!p.input_image_url) return res.status(400).json({ ok:false, error:'input_image_url missing' });
+
+    const submit = await submitPreviewJob({
+      imageUrl: p.input_image_url,
+      prompt:   p.goal || '',
+      roomType: p.room_type || null,
+      scalePxPerIn: p.scale_px_per_in ?? null,
+      dimensionsJson: p.dimensions_json ?? null,
+    });
+
+    await savePreviewQueued(projectId, submit.jobId, { submit_raw: submit.raw || null });
+
+    console.log('[preview submit] queued', { projectId, jobId: submit.jobId, mode: submit.mode });
+    return res.json({ ok:true, projectId, jobId: submit.jobId, mode: submit.mode });
+  } catch (e) {
+    console.error('[preview submit] error', e);
+    return res.status(500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+router.get('/preview/status/:projectId', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const p = await getProject(projectId);
+    if (!p) return res.status(404).json({ ok:false, error:'project not found' });
+
+    // If already ready, short-circuit
+    if (p.preview_status === 'ready' && p.preview_url) {
+      return res.json({ ok:true, status:'ready', preview_url: p.preview_url, cached:true });
+    }
+
+    // Must have a jobId in meta to poll
+    const jobId = p.preview_meta?.jobId || p.preview_meta?.job_id || null;
+    if (!jobId) return res.json({ ok:true, status: p.preview_status || 'idle', preview_url: p.preview_url || null });
+
+    const status = await fetchPreviewStatus(jobId);
+
+    console.log('[preview poll]', { projectId, jobId, status: status.status });
+    if (status.status === 'ready' && status.preview_url) {
+      await savePreviewReady(projectId, status.preview_url, { thumb_url: status.thumb_url, status_raw: status.raw || null });
+      return res.json({ ok:true, status:'ready', preview_url: status.preview_url });
+    }
+
+    return res.json({ ok:true, status: status.status, preview_url: null });
+  } catch (e) {
+    console.error('[preview poll] error', e);
+    return res.status(500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+// Diagnostics for quick checks
+router.get('/selftest/preview/:projectId', async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const p = await getProject(projectId);
+    if (!p) return res.status(404).json({ ok:false, error:'project not found' });
+    const jobId = p.preview_meta?.jobId || null;
+    res.json({
+      ok: true,
+      project: {
+        id: p.id,
+        status: p.status,
+        preview_status: p.preview_status,
+        has_preview_url: !!p.preview_url,
+        has_image: !!p.input_image_url,
+        has_scale: p.scale_px_per_in != null,
+        has_dimensions: !!p.dimensions_json,
+      },
+      jobId
+    });
+  } catch (e) {
+    console.error('[preview selftest] error', e);
+    res.status(500).json({ ok:false, error:String(e.message || e) });
+  }
+});
+
+module.exports = router;
+
+3) Mount the router (e.g., index.js)
+// index.js
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+// ...existing requires & routes...
+
+const previewRouter = require('./routes/preview');
+app.use('/', previewRouter); // mount at root or '/api'
+
+// ...existing app.listen(...)
+
+4) Acceptance (what to verify in logs/UI)
+
+Submit: [preview submit] queued { projectId, jobId, mode }
+
+Poll: [preview poll] { projectId, jobId, status }
+
+Ready: DB updated → projects.preview_url set, preview_status='ready', status='active'
+
+In the app: ProjectDetails hero becomes the preview (falls back to scan/upload until ready)

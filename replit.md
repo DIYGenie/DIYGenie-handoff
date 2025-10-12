@@ -176,6 +176,17 @@ Transitions triggered by explicit API calls, not automatic
 ## Recent Updates
 
 ### October 12, 2025
+**End-to-End Preview Flow with Service Architecture**
+- Created `services/decor8Client.js` - Centralized Decor8 API service with stub fallback
+- Created `routes/preview.js` - Modular preview router with Supabase integration
+- Added `POST /preview/decor8` - Submit preview job with AR context forwarding
+- Added `GET /preview/status/:projectId` - Poll job status with auto-save on ready
+- Added `GET /selftest/preview/:projectId` - Diagnostic endpoint for troubleshooting
+- Mode detection: Stub (development) vs Live (production) based on `DECOR8_BASE_URL`
+- AR context support: Forwards `scale_px_per_in` and `dimensions_json` when available
+- Comprehensive logging: `[preview submit]`, `[preview poll]` at each step
+- Installed `node-fetch` for HTTP requests in service layer
+
 **Plan Normalization & Persistence**
 - Added `mapPlanToNormalized()` helper - Ensures consistent plan structure with overview, materials, tools, cuts, and steps
 - Added `savePlan(projectId, plan)` helper - Normalizes and saves plan with status update to 'active'
