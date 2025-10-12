@@ -175,6 +175,27 @@ Transitions triggered by explicit API calls, not automatic
 
 ## Recent Updates
 
+### October 12, 2025
+**Plan Normalization & Persistence**
+- Added `mapPlanToNormalized()` helper - Ensures consistent plan structure with overview, materials, tools, cuts, and steps
+- Added `savePlan(projectId, plan)` helper - Normalizes and saves plan with status update to 'active'
+- Added `GET /selftest/plan/:projectId` - Diagnostic endpoint returning counts and top-level keys
+- Added `PATCH /projects/:projectId/plan` - Ingest raw plan data and normalize before saving
+- Plan structure guarantees:
+  - `overview`: { title, est_time, est_cost, skill, notes }
+  - `materials`: Array of { name, qty, notes }
+  - `tools`: Array of { name, notes }
+  - `cuts`: Array of { item, size, qty, notes }
+  - `steps`: Array of { order, text, notes } (auto-sorted by order)
+- Coerces falsy/missing to empty arrays, filters out empty entries
+- Verbose logging: `[plan map]` with counts, `[plan save]` with upsert confirmation
+
+**Admin Endpoints**
+- Added `PATCH /api/projects/:projectId` - Secure project update with whitelist (status, name, preview_url)
+- Added `DELETE /api/admin/purge-test-data` - User-based data purge with dry-run support
+- Auth: Header-based `x-admin-token` for admin endpoints
+- Returns 401 for unauthorized, 400 for missing params, 403 for forbidden
+
 ### October 11, 2025
 **Real Decor8 AI Integration for Preview Generation**
 - Migrated from stub to production Decor8 API integration

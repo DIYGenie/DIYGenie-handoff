@@ -1,0 +1,180 @@
+Goal: Ensure plans are persisted in projects.plan_json as normalized arrays and status is updated so the app renders sections.
+
+Tasks
+
+In index.js (or your main Express file), add:
+
+A mapPlanToNormalized(plan) that guarantees these keys:
+
+{
+  overview: {
+    title?: string,
+    est_time?: string,
+    est_cost?: string,
+    skill?: string,
+    notes?: string
+  },
+  materials: Array<{ name: string; qty?: string | number; notes?: string }>,
+  tools: Array<{ name: string; notes?: string }>,
+  cuts: Array<{ item: string; size?: string; qty?: number; notes?: string }>,
+  steps: Array<{ order: number; text: string; notes?: string }>
+}
+
+
+Coerce falsy/missing to empty arrays; sort steps by order.
+
+A DB helper savePlan(projectId, plan) that:
+
+UPDATE projects SET plan_json = $1, status = 'active', updated_at = now() WHERE id = $2
+
+Returns { ok: true, counts } where counts are array lengths.
+
+Verbose logs: [plan map], [plan save].
+
+Add a safe diagnostic endpoint:
+
+GET /selftest/plan/:projectId → loads projects.plan_json and returns counts + a few top-level keys (no PII).
+
+Logs [plan selftest] with counts.
+
+Add an ingest endpoint you can hit from the app/repl while AI mapping is finishing:
+
+PATCH /projects/:projectId/plan (JSON body = raw plan from AI/stub).
+
+Maps via mapPlanToNormalized and saves with savePlan.
+
+Exact edits (minimal):
+
+// index.js (or main server file)
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+// TODO: replace with your existing pg or supabase client import
+const { Pool } = require('pg');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+function arr(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
+function num(n, d=0){ const v = Number(n); return Number.isFinite(v) ? v : d; }
+
+function mapPlanToNormalized(input = {}) {
+  const src = input || {};
+  const overview = {
+    title: src.overview?.title ?? src.title ?? null,
+    est_time: src.overview?.est_time ?? src.time ?? null,
+    est_cost: src.overview?.est_cost ?? src.cost ?? null,
+    skill: src.overview?.skill ?? src.skill ?? null,
+    notes: src.overview?.notes ?? null,
+  };
+
+  const materials = arr(src.materials).map(m => ({
+    name: String(m?.name ?? m?.item ?? '').trim(),
+    qty: m?.qty ?? m?.quantity ?? m?.amount ?? null,
+    notes: m?.notes ?? null,
+  })).filter(m => m.name);
+
+  const tools = arr(src.tools).map(t => ({
+    name: String(t?.name ?? t?.tool ?? '').trim(),
+    notes: t?.notes ?? null,
+  })).filter(t => t.name);
+
+  const cuts = arr(src.cuts).map(c => ({
+    item: String(c?.item ?? c?.name ?? '').trim(),
+    size: c?.size ?? c?.dimensions ?? null,
+    qty: num(c?.qty ?? c?.quantity, null),
+    notes: c?.notes ?? null,
+  })).filter(c => c.item);
+
+  const stepsRaw = arr(src.steps).map((s, i) => ({
+    order: num(s?.order, i + 1),
+    text: String(s?.text ?? s?.step ?? '').trim(),
+    notes: s?.notes ?? null,
+  })).filter(s => s.text);
+
+  const steps = stepsRaw.sort((a,b) => a.order - b.order);
+
+  const normalized = { overview, materials, tools, cuts, steps };
+  console.log('[plan map] counts', {
+    materials: materials.length, tools: tools.length, cuts: cuts.length, steps: steps.length
+  });
+  return normalized;
+}
+
+async function savePlan(projectId, plan) {
+  const client = await pool.connect();
+  try {
+    const normalized = mapPlanToNormalized(plan);
+    const q = `
+      update projects
+         set plan_json = $1::jsonb,
+             status = 'active',
+             updated_at = now()
+       where id = $2::uuid
+       returning id, (plan_json->'materials') as materials, (plan_json->'tools') as tools,
+                 (plan_json->'cuts') as cuts, (plan_json->'steps') as steps
+    `;
+    const { rows } = await client.query(q, [JSON.stringify(normalized), projectId]);
+    const r = rows[0];
+    const counts = {
+      materials: Array.isArray(r?.materials) ? r.materials.length : 0,
+      tools: Array.isArray(r?.tools) ? r.tools.length : 0,
+      cuts: Array.isArray(r?.cuts) ? r.cuts.length : 0,
+      steps: Array.isArray(r?.steps) ? r.steps.length : 0,
+    };
+    console.log('[plan save] upsert ok', { projectId, counts });
+    return { ok: true, counts };
+  } finally {
+    client.release();
+  }
+}
+
+// --- Routes ---
+
+app.get('/selftest/plan/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const { rows } = await pool.query(
+      'select plan_json from projects where id = $1::uuid',
+      [projectId]
+    );
+    const pj = rows[0]?.plan_json || {};
+    const counts = {
+      materials: Array.isArray(pj?.materials) ? pj.materials.length : 0,
+      tools: Array.isArray(pj?.tools) ? pj.tools.length : 0,
+      cuts: Array.isArray(pj?.cuts) ? pj.cuts.length : 0,
+      steps: Array.isArray(pj?.steps) ? pj.steps.length : 0,
+    };
+    console.log('[plan selftest]', { projectId, counts });
+    res.json({ ok: true, counts, keys: Object.keys(pj || {}) });
+  } catch (e) {
+    console.error('[plan selftest] error', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.patch('/projects/:projectId/plan', async (req, res) => {
+  const { projectId } = req.params;
+  const raw = req.body || {};
+  try {
+    const result = await savePlan(projectId, raw);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[plan ingest] error', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// (keep existing app.listen(...))
+
+
+Acceptance check (what you should see after deploy):
+
+Call your new self-test endpoint in a tab: /selftest/plan/<projectId> → { counts: { materials>0 | steps>0 ... } }.
+
+When your AI plan builder runs (or you temporarily POST a stub plan via your existing build step), the server logs:
+
+[plan map] counts …
+
+[plan save] upsert ok { projectId, counts }
+
+In the app, ProjectDetails should now render non-zero sections.

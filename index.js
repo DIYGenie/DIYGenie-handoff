@@ -1338,6 +1338,123 @@ app.post('/api/projects/:id/plan', async (req, res) => {
   }
 });
 
+// --- Plan Normalization Helpers ---
+function arr(x) { return Array.isArray(x) ? x : (x ? [x] : []); }
+function num(n, d=0){ const v = Number(n); return Number.isFinite(v) ? v : d; }
+
+function mapPlanToNormalized(input = {}) {
+  const src = input || {};
+  const overview = {
+    title: src.overview?.title ?? src.title ?? null,
+    est_time: src.overview?.est_time ?? src.time ?? null,
+    est_cost: src.overview?.est_cost ?? src.cost ?? null,
+    skill: src.overview?.skill ?? src.skill ?? null,
+    notes: src.overview?.notes ?? null,
+  };
+
+  const materials = arr(src.materials).map(m => ({
+    name: String(m?.name ?? m?.item ?? '').trim(),
+    qty: m?.qty ?? m?.quantity ?? m?.amount ?? null,
+    notes: m?.notes ?? null,
+  })).filter(m => m.name);
+
+  const tools = arr(src.tools).map(t => ({
+    name: String(t?.name ?? t?.tool ?? '').trim(),
+    notes: t?.notes ?? null,
+  })).filter(t => t.name);
+
+  const cuts = arr(src.cuts).map(c => ({
+    item: String(c?.item ?? c?.name ?? '').trim(),
+    size: c?.size ?? c?.dimensions ?? null,
+    qty: num(c?.qty ?? c?.quantity, null),
+    notes: c?.notes ?? null,
+  })).filter(c => c.item);
+
+  const stepsRaw = arr(src.steps).map((s, i) => ({
+    order: num(s?.order, i + 1),
+    text: String(s?.text ?? s?.step ?? '').trim(),
+    notes: s?.notes ?? null,
+  })).filter(s => s.text);
+
+  const steps = stepsRaw.sort((a,b) => a.order - b.order);
+
+  const normalized = { overview, materials, tools, cuts, steps };
+  console.log('[plan map] counts', {
+    materials: materials.length, tools: tools.length, cuts: cuts.length, steps: steps.length
+  });
+  return normalized;
+}
+
+async function savePlan(projectId, plan) {
+  const normalized = mapPlanToNormalized(plan);
+  
+  const { data, error } = await supabase
+    .from('projects')
+    .update({
+      plan_json: normalized,
+      status: 'active',
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', projectId)
+    .select('id, plan_json')
+    .maybeSingle();
+  
+  if (error) throw error;
+  
+  const pj = data?.plan_json || {};
+  const counts = {
+    materials: Array.isArray(pj?.materials) ? pj.materials.length : 0,
+    tools: Array.isArray(pj?.tools) ? pj.tools.length : 0,
+    cuts: Array.isArray(pj?.cuts) ? pj.cuts.length : 0,
+    steps: Array.isArray(pj?.steps) ? pj.steps.length : 0,
+  };
+  
+  console.log('[plan save] upsert ok', { projectId, counts });
+  return { ok: true, counts };
+}
+
+// --- Plan Diagnostic & Ingest Endpoints ---
+
+// GET /selftest/plan/:projectId - Diagnostic endpoint
+app.get('/selftest/plan/:projectId', async (req, res) => {
+  const { projectId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('plan_json')
+      .eq('id', projectId)
+      .maybeSingle();
+    
+    if (error) throw error;
+    
+    const pj = data?.plan_json || {};
+    const counts = {
+      materials: Array.isArray(pj?.materials) ? pj.materials.length : 0,
+      tools: Array.isArray(pj?.tools) ? pj.tools.length : 0,
+      cuts: Array.isArray(pj?.cuts) ? pj.cuts.length : 0,
+      steps: Array.isArray(pj?.steps) ? pj.steps.length : 0,
+    };
+    console.log('[plan selftest]', { projectId, counts });
+    res.json({ ok: true, counts, keys: Object.keys(pj || {}) });
+  } catch (e) {
+    console.error('[plan selftest] error', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// PATCH /projects/:projectId/plan - Ingest raw plan and normalize
+app.patch('/projects/:projectId/plan', async (req, res) => {
+  const { projectId } = req.params;
+  const raw = req.body || {};
+  try {
+    const result = await savePlan(projectId, raw);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[plan ingest] error', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 // --- Progress tracking endpoints ---
 // GET progress for a project
 app.get('/api/projects/:id/progress', async (req, res) => {
