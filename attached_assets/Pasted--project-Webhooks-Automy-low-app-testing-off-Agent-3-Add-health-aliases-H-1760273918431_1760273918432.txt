@@ -1,0 +1,77 @@
+* **project:** Webhooks
+* **Automy:** low
+* **app testing:** off
+
+**Agent 3 — Add health aliases + HEAD + CORS + /version (safe, additive only)**
+
+* Create/modify only in `diy-genie-webhooks`. Don’t remove existing health routes. Keep structured logs.
+
+**Tasks**
+
+* **Mount aliases under `/api/*`** that mirror existing health routes:
+
+  * `GET /api/health` → same as `/health`
+  * `GET /api/health/ready` → same as `/health/ready`
+  * `GET /api/health/full` → same as `/health/full`
+* **Add `HEAD` handlers** for `/health`, `/health/ready`, `/health/full` (and `/api/*` equivalents) returning `200` with no body.
+* **Add lightweight CORS** only for health/version endpoints: set `Access-Control-Allow-Origin: *`.
+* **Add `GET /version` (and `/api/version`)**: returns `{ service: <pkg.name>, version: <pkg.version>, node: process.version }`.
+* **Keep logs structured**: `{"event":"health.alias","path":"/api/health/full","status":200}`.
+
+**Implementation (surgical)**
+
+1. In `routes/health.js`:
+
+   * Export the existing handlers (`health`, `live`, `ready`, `full`) as named functions so they can be reused.
+   * Add `HEAD` variants that just `res.status(200).end()`.
+   * For every response in health routes, set `res.set('Access-Control-Allow-Origin','*')`.
+
+2. New `routes/version.js`:
+
+```js
+const express = require('express');
+const router = express.Router();
+const pkg = require('../package.json');
+router.get(['/version','/api/version'], (req,res) => {
+  res.set('Access-Control-Allow-Origin','*');
+  res.json({ service: pkg.name || 'diy-genie-webhooks', version: pkg.version || '0.0.0', node: process.version });
+});
+router.head(['/version','/api/version'], (req,res) => res.status(200).end());
+module.exports = router;
+```
+
+3. In main server (`index.js`):
+
+   * After mounting existing health router at `/`, **also** mount its handlers at `/api/*` paths by adding alias routes that call through to the same functions.
+   * Example:
+
+```js
+const healthRouter = require('./routes/health');
+app.use('/', healthRouter);
+
+// Aliases
+const { healthGet, liveGet, readyGet, fullGet, healthHead, readyHead, fullHead } = require('./routes/health'); // export these
+app.get('/api/health', healthGet);
+app.get('/api/health/live', liveGet);
+app.get('/api/health/ready', readyGet);
+app.get('/api/health/full', fullGet);
+app.head(['/health','/health/live','/health/ready','/health/full'], healthHead); // implement head to 200
+app.head(['/api/health','/api/health/live','/api/health/ready','/api/health/full'], healthHead);
+
+const versionRouter = require('./routes/version');
+app.use('/', versionRouter);
+```
+
+**Acceptance**
+
+* `GET /health/full` → 200 JSON; `GET /api/health/full` → identical 200 JSON.
+* `HEAD /health` and `HEAD /api/health` → 200, empty body.
+* `GET /version` and `/api/version` → `{ service, version, node }`.
+* Responses include `Access-Control-Allow-Origin: *`.
+* Logs show one-line JSON entries for alias hits.
+
+**Report back with:**
+
+* Sample response from `/api/health/full` (just the `"modes"` block).
+* HTTP status for `HEAD /api/health`.
+* `/version` payload.

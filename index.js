@@ -4,7 +4,8 @@ import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import previewRouter from './routes/preview.js';
-import healthRouter from './routes/health.js';
+import healthRouter, { healthGet, liveGet, readyGet, fullGet, healthHead } from './routes/health.js';
+import versionRouter, { versionGet, versionHead } from './routes/version.js';
 
 const app = express();
 app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
@@ -1972,6 +1973,23 @@ app.use('/', previewRouter);
 
 // --- Mount Health Router ---
 app.use('/', healthRouter);
+
+// --- Mount Version Router ---
+app.use('/', versionRouter);
+
+// --- Health & Version Aliases under /api ---
+app.get('/api/health', healthGet);
+app.get('/api/health/live', liveGet);
+app.get('/api/health/ready', readyGet);
+app.get('/api/health/full', fullGet);
+app.get('/api/version', versionGet);
+
+// HEAD handlers for /api aliases
+app.head('/api/health', healthHead);
+app.head('/api/health/live', healthHead);
+app.head('/api/health/ready', healthHead);
+app.head('/api/health/full', healthHead);
+app.head('/api/version', versionHead);
 
 // --- Listen ---
 const PORT = process.env.PORT || 5000;

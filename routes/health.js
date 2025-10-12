@@ -20,15 +20,21 @@ function modeFlags() {
   return { decor8: decor8Mode, openai: openaiMode };
 }
 
-router.get('/health', (_req, res) => {
-  res.json({ ok: true, status: 'healthy', version: pkg.version, uptime_s: Math.floor(process.uptime()) });
-});
+// Exported handler functions for reuse in aliases
+export function healthGet(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
+  const payload = { ok: true, status: 'healthy', version: pkg.version, uptime_s: Math.floor(process.uptime()) };
+  log('health.alias', { path: req.path, status: 200 });
+  res.json(payload);
+}
 
-router.get('/health/live', (_req, res) => {
+export function liveGet(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
   res.json({ ok: true, status: 'live' });
-});
+}
 
-router.get('/health/ready', async (_req, res) => {
+export async function readyGet(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
   const checks = [];
   
   // DB check using Supabase - simple query to test connection
@@ -46,10 +52,12 @@ router.get('/health/ready', async (_req, res) => {
   
   const allOk = checks.every(c => c.ok);
   if (!allOk) log('health.ready.fail', { checks });
+  log('health.alias', { path: req.path, status: allOk ? 200 : 503 });
   res.status(allOk ? 200 : 503).json({ ok: allOk, checks });
-});
+}
 
-router.get('/health/full', async (_req, res) => {
+export async function fullGet(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
   const started = Date.now();
   const checks = [];
 
@@ -89,7 +97,26 @@ router.get('/health/full', async (_req, res) => {
   };
 
   log('health.full', { ok: payload.ok, modes, duration_ms: payload.duration_ms });
+  log('health.alias', { path: req.path, status: payload.ok ? 200 : 503 });
   res.status(payload.ok ? 200 : 503).json(payload);
-});
+}
+
+// HEAD handler for all health endpoints
+export function healthHead(req, res) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.status(200).end();
+}
+
+// Mount handlers on router
+router.get('/health', healthGet);
+router.get('/health/live', liveGet);
+router.get('/health/ready', readyGet);
+router.get('/health/full', fullGet);
+
+// HEAD handlers
+router.head('/health', healthHead);
+router.head('/health/live', healthHead);
+router.head('/health/ready', healthHead);
+router.head('/health/full', healthHead);
 
 export default router;

@@ -176,6 +176,16 @@ Transitions triggered by explicit API calls, not automatic
 ## Recent Updates
 
 ### October 12, 2025
+**Health Endpoint Aliases & Enhancements**
+- Refactored `routes/health.js` to export named handler functions for reusability
+- Created `routes/version.js` - Version information endpoints
+- Added `/api/*` aliases for all health endpoints (`/api/health`, `/api/health/ready`, `/api/health/full`)
+- Added `HEAD` support for all health and version endpoints (lightweight checks)
+- Added CORS headers (`Access-Control-Allow-Origin: *`) to all health/version responses
+- Added `GET /version` and `GET /api/version` - Service version info
+- Structured logging for alias requests: `{"event":"health.alias","path":"/api/health/full","status":200}`
+- All endpoints tested and verified - 16 health endpoints + 4 version endpoints = 20 total
+
 **Health Endpoints & Structured Logging**
 - Created `utils/logger.js` - Structured JSON logger with secret redaction
 - Created `routes/health.js` - Comprehensive health check endpoints
