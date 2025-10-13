@@ -317,3 +317,78 @@ Response:
 - ✅ Deterministic content (seeded by prompt length)
 - ✅ Structured JSON logging
 - ✅ Complete plan schema with materials, tools, steps, and cost estimation
+
+## Entitlements Endpoints
+
+Credit-based usage tracking with automatic monthly rollover.
+
+### POST /entitlements/check
+
+Check user's current entitlements and remaining credits.
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/entitlements/check \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"e4cb3591-7272-46dd-b1f6-d7cc4e2f3d24"}'
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "tier": "pro",
+  "quota": 25,
+  "used": 1,
+  "remaining": 24,
+  "credits_month_key": "202510"
+}
+```
+
+**Error (400 Bad Request):**
+```bash
+curl -X POST http://localhost:5000/entitlements/check \
+  -H 'Content-Type: application/json' -d '{}'
+```
+Response: `{"ok":false,"error":"missing_user_id"}`
+
+### POST /entitlements/consume
+
+Consume one credit from user's monthly quota.
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/entitlements/consume \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"e4cb3591-7272-46dd-b1f6-d7cc4e2f3d24"}'
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "used": 2,
+  "remaining": 23
+}
+```
+
+**Error (402 Payment Required - Quota Exhausted):**
+```json
+{
+  "ok": false,
+  "error": "quota_exhausted",
+  "quota": 25,
+  "used": 25,
+  "remaining": 0
+}
+```
+
+**Monthly Rollover:**
+- Automatically resets `used` to 0 when month changes
+- Uses `credits_month_key` (format: YYYYMM) to track current month
+- Rollover happens on first request in new month
+
+**Optimistic Concurrency:**
+- Uses PostgREST filters to prevent race conditions
+- Retries once on conflict
+- Returns 409 if concurrent updates conflict

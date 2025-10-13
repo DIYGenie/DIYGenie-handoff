@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import previewRouter from './routes/preview.js';
 import planRouter from './routes/plan.js';
+import entitlementsRouter from './routes/entitlements.js';
 import healthRouter, { healthGet, liveGet, readyGet, fullGet, healthHead } from './routes/health.js';
 import versionRouter, { versionGet, versionHead } from './routes/version.js';
 
@@ -1974,6 +1975,9 @@ app.use('/', previewRouter);
 
 // --- Mount Plan Router ---
 app.use('/', planRouter);
+
+// --- Mount Entitlements Router ---
+app.use('/', entitlementsRouter);
 
 // --- Mount Health Router ---
 app.use('/', healthRouter);

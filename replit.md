@@ -176,6 +176,19 @@ Transitions triggered by explicit API calls, not automatic
 ## Recent Updates
 
 ### October 13, 2025
+**Entitlements System with Credit Tracking**
+- Added `routes/entitlements.js` - Credit-based usage tracking with monthly rollover
+- Added `POST /entitlements/check` - Check user's quota, used credits, and remaining credits
+- Added `POST /entitlements/consume` - Consume one credit with optimistic concurrency control
+- Monthly rollover: Automatically resets `plan_credits_used_month` to 0 when `credits_month_key` changes from current month
+- Optimistic updates: Uses PostgREST filters (`credits_month_key=eq.{YYYYMM}&plan_credits_used_month=eq.{current}`) to prevent race conditions
+- Retry logic: On conflict, refetches and retries once; returns 409 if still conflicted
+- Error handling: 400 (missing user_id), 402 (quota_exhausted), 409 (consume_conflict), 500 (server error)
+- Structured JSON logging: `{"event":"entitlements_check","user_id":"...","out":{...}}` and `{"event":"entitlements_consume_ok","out":{...}}`
+- Uses native fetch with Supabase REST API (no Supabase JS client dependency in route)
+- Database columns added to profiles: `subscription_tier`, `plan_quota_monthly`, `plan_credits_used_month`, `credits_month_key`, `is_subscribed`
+- Documentation added to README.md with curl examples
+
 **Stubbed Plan Endpoint**
 - Added `POST /plan` - Lightweight stub endpoint for plan generation without external API calls
 - Input validation: `photo_url` (required), `prompt` (required), `measurements` (optional)
