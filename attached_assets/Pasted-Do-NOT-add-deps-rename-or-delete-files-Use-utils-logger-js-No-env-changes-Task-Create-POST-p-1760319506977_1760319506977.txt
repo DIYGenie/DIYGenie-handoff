@@ -1,0 +1,162 @@
+Do NOT add deps, rename, or delete files. Use utils/logger.js. No env changes.
+
+Task:
+Create POST /plan that:
+
+Requires photo_url (string) and prompt (string); optional measurements (object).
+
+Returns 200 with ok:true, source:"stub|openai", and plan strictly conforming to the provided schema.
+
+On bad payload → 400 { ok:false, error:"invalid_payload", fields_missing:[...] }.
+
+Logs single-line JSON (route:"/plan", event:...).
+
+Estimation: compute simple totals from materials/tools arrays; set contingency_pct = 0.12; grand_total = (materials_total + tools_total) * (1 + contingency_pct).
+
+Deliverables:
+
+New file routes/plan.js
+
+Mount in index.js at /plan (minimal diff)
+
+Append curl examples to README or DEV_NOTES
+
+Files
+
+1) routes/plan.js (NEW – full content)
+
+const express = require('express');
+const router = express.Router();
+const logger = require('../utils/logger');
+
+/**
+ * POST /plan
+ * Stub OpenAI plan: validates input and returns a strict-schema JSON plan.
+ * No external calls. Deterministic content seeded by prompt length.
+ */
+router.post('/', (req, res) => {
+  const { photo_url, prompt, measurements } = req.body || {};
+
+  const missing = [];
+  if (!photo_url || typeof photo_url !== 'string') missing.push('photo_url');
+  if (!prompt || typeof prompt !== 'string') missing.push('prompt');
+
+  if (missing.length) {
+    logger.info({ route: '/plan', event: 'validation_error', missing });
+    return res.status(400).json({ ok: false, error: 'invalid_payload', fields_missing: missing });
+  }
+
+  // Simple deterministic seed: choose a style/material based on prompt length
+  const n = prompt.length % 3; // 0,1,2
+  const style = ['modern', 'coastal', 'farmhouse'][n];
+  const wood = ['birch', 'oak', 'maple'][n];
+  const bracketFinish = ['matte black', 'brushed nickel', 'white'][n];
+
+  // Measurements fallback (inches) — safe coercion for stub display only
+  const m = (measurements && typeof measurements === 'object') ? measurements : {};
+  const width_in = Number(m.width_in || 72);
+  const depth_in = Number(m.depth_in || 10);
+
+  // Materials with naive unit costs
+  const materials = [
+    { name: `${wood} plywood 3/4" (4x8)`, qty: 1, unit: 'sheet', unit_price: 68.0, subtotal: 68.0, notes: 'Cut to shelf pieces' },
+    { name: 'Edge banding 3/4"', qty: Math.ceil(width_in / 96), unit: 'ea', unit_price: 7.5, subtotal: Math.ceil(width_in / 96) * 7.5 },
+    { name: `${bracketFinish} L-brackets`, qty: 4, unit: 'ea', unit_price: 9.0, subtotal: 36.0, notes: 'Two per shelf' },
+    { name: 'Wood screws #8 x 1-1/4"', qty: 1, unit: 'lb', unit_price: 6.0, subtotal: 6.0 },
+    { name: 'Wall anchors', qty: 8, unit: 'ea', unit_price: 0.6, subtotal: 4.8 }
+  ];
+
+  const tools = [
+    { name: 'Drill/driver', have: true,  rent_price: 0,  buy_price: 89 },
+    { name: 'Stud finder', have: false, rent_price: 8,  buy_price: 22 },
+    { name: 'Level (24")', have: false, rent_price: 6,  buy_price: 15 }
+  ];
+
+  const cut_list = [
+    { item: 'Shelf', dimensions: `${width_in}" x ${depth_in}" x 3/4"`, qty: 2, notes: `${wood}` },
+  ];
+
+  const steps = [
+    { n: 1, title: 'Plan & mark studs', details: 'Locate studs, mark shelf height and bracket positions.', duration_min: 15, depends_on: [] },
+    { n: 2, title: 'Cut shelves', details: `Cut ${wood} plywood to size; apply edge banding.`, duration_min: 30, depends_on: [1] },
+    { n: 3, title: 'Pre-drill brackets', details: `Pre-drill ${bracketFinish} brackets and shelf underside.`, duration_min: 20, depends_on: [2] },
+    { n: 4, title: 'Mount brackets', details: 'Level and fasten brackets into studs/anchors.', duration_min: 25, depends_on: [3] },
+    { n: 5, title: 'Install shelves', details: 'Place shelves and secure with screws; final check.', duration_min: 20, depends_on: [4] }
+  ];
+
+  const safety = [
+    'Wear eye and hearing protection.',
+    'Use anchors appropriate for your wall type.',
+    'Confirm no electrical/plumbing behind drill points.'
+  ];
+
+  const materials_total = Number(materials.reduce((s, m) => s + (Number(m.subtotal) || 0), 0).toFixed(2));
+  const tools_total = Number(
+    tools.reduce((s, t) => s + (t.have ? 0 : Math.min(t.rent_price || 0, t.buy_price || 0)), 0).toFixed(2)
+  );
+  const contingency_pct = 0.12;
+  const grand_total = Number(((materials_total + tools_total) * (1 + contingency_pct)).toFixed(2));
+
+  const plan = {
+    overview: `${style} floating shelves plan generated from prompt.`,
+    assumptions: [
+      'Wall is plumb with accessible studs or solid anchors.',
+      `Target width ~${width_in}" and depth ~${depth_in}".`,
+      'Basic DIY tools available; renting optional tools as needed.'
+    ],
+    materials,
+    tools,
+    cut_list,
+    steps,
+    safety,
+    estimation: { materials_total, tools_total, contingency_pct, grand_total }
+  };
+
+  logger.info({
+    route: '/plan',
+    event: 'stub_generate',
+    source: 'stub|openai',
+    style,
+    has_measurements: Boolean(measurements && typeof measurements === 'object')
+  });
+
+  return res.status(200).json({ ok: true, source: 'stub|openai', plan });
+});
+
+module.exports = router;
+
+
+2) index.js (SAFE minimal diff – mount route)
+
+@@
+ const express = require('express');
+ const app = express();
+ app.use(express.json());
+ 
+ const previewRoute = require('./routes/preview');
+ app.use('/preview', previewRoute);
++
++const planRoute = require('./routes/plan');
++app.use('/plan', planRoute);
+
+Quick tests
+
+Valid:
+
+curl -s -X POST http://localhost:5000/plan \
+  -H 'content-type: application/json' \
+  -d '{
+    "photo_url":"https://example.com/user-upload/123.jpg",
+    "prompt":"modern floating shelves, matte black",
+    "measurements":{"width_in":72,"depth_in":10}
+  }' | jq
+
+
+Expect: 200 with ok:true, source:"stub|openai", and plan matching the strict schema.
+
+Invalid:
+
+curl -s -X POST http://localhost:5000/plan -H 'content-type: application/json' -d '{}' | jq
+
+
+Expect: 400 with fields_missing:["photo_url","prompt"].

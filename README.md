@@ -205,3 +205,115 @@ Response:
 - ✅ Deterministic preview URLs (seeded by photo_url + prompt)
 - ✅ Structured JSON logging
 - ✅ Input validation with clear error messages
+
+## Plan Endpoint (Stub Mode)
+
+A lightweight stub endpoint for testing plan generation without external API calls.
+
+### POST /plan
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/plan \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "photo_url": "https://example.com/room.jpg",
+    "prompt": "coastal blue floating shelves with white trim",
+    "measurements": {"width_in": 96, "depth_in": 12}
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "source": "stub|openai",
+  "plan": {
+    "overview": "modern floating shelves plan generated from prompt.",
+    "assumptions": [
+      "Wall is plumb with accessible studs or solid anchors.",
+      "Target width ~96\" and depth ~12\".",
+      "Basic DIY tools available; renting optional tools as needed."
+    ],
+    "materials": [
+      {
+        "name": "birch plywood 3/4\" (4x8)",
+        "qty": 1,
+        "unit": "sheet",
+        "unit_price": 68.0,
+        "subtotal": 68.0,
+        "notes": "Cut to shelf pieces"
+      }
+    ],
+    "tools": [
+      {
+        "name": "Drill/driver",
+        "have": true,
+        "rent_price": 0,
+        "buy_price": 89
+      }
+    ],
+    "cut_list": [
+      {
+        "item": "Shelf",
+        "dimensions": "96\" x 12\" x 3/4\"",
+        "qty": 2,
+        "notes": "birch"
+      }
+    ],
+    "steps": [
+      {
+        "n": 1,
+        "title": "Plan & mark studs",
+        "details": "Locate studs, mark shelf height and bracket positions.",
+        "duration_min": 15,
+        "depends_on": []
+      }
+    ],
+    "safety": [
+      "Wear eye and hearing protection.",
+      "Use anchors appropriate for your wall type.",
+      "Confirm no electrical/plumbing behind drill points."
+    ],
+    "estimation": {
+      "materials_total": 122.3,
+      "tools_total": 14,
+      "contingency_pct": 0.12,
+      "grand_total": 152.66
+    }
+  }
+}
+```
+
+**Validation Error (400 Bad Request):**
+```bash
+curl -X POST http://localhost:5000/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"photo_url":"test"}'
+```
+
+Response:
+```json
+{
+  "ok": false,
+  "error": "invalid_payload",
+  "fields_missing": ["prompt"]
+}
+```
+
+**Fields:**
+- `photo_url` (required, string) - URL of the uploaded photo
+- `prompt` (required, string) - User's design prompt/description
+- `measurements` (optional, object) - Room measurements from AR scan
+
+**Estimation Logic:**
+- `materials_total` - Sum of all material subtotals
+- `tools_total` - Sum of minimum cost (rent vs buy) for tools user doesn't have
+- `contingency_pct` - Fixed at 0.12 (12%)
+- `grand_total` - `(materials_total + tools_total) * (1 + contingency_pct)`
+
+**Features:**
+- ✅ No external API calls - safe for offline/dev use
+- ✅ Deterministic content (seeded by prompt length)
+- ✅ Structured JSON logging
+- ✅ Complete plan schema with materials, tools, steps, and cost estimation

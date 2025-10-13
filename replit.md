@@ -176,6 +176,17 @@ Transitions triggered by explicit API calls, not automatic
 ## Recent Updates
 
 ### October 13, 2025
+**Stubbed Plan Endpoint**
+- Added `POST /plan` - Lightweight stub endpoint for plan generation without external API calls
+- Input validation: `photo_url` (required), `prompt` (required), `measurements` (optional)
+- Returns complete plan schema with materials, tools, cut_list, steps, safety notes, and cost estimation
+- Deterministic content seeded by prompt length (style variations: modern/coastal/farmhouse)
+- Cost estimation logic: `grand_total = (materials_total + tools_total) * (1 + contingency_pct)` where contingency_pct = 0.12
+- Error handling: 400 on bad payload with `fields_missing` array
+- Structured JSON logging: `{"event":"stub_generate","route":"/plan","source":"stub|openai","style":"modern","has_measurements":true}`
+- Safe for offline/dev use - no environment variables required
+- Documentation added to README.md with curl examples and schema details
+
 **Stubbed Preview Endpoint**
 - Added `POST /preview` - Lightweight stub endpoint for preview generation without external API calls
 - Input validation: `photo_url` (required), `prompt` (required), `measurements` (optional)
