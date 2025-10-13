@@ -142,3 +142,66 @@ The test auto-discovers the dev user and validates:
 - Plan building
 - Entitlements quota enforcement
 - Status transitions
+
+## Preview Endpoint (Stub Mode)
+
+A lightweight stub endpoint for testing preview generation without external API calls.
+
+### POST /preview
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/preview \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "photo_url": "https://example.com/user-upload/123.jpg",
+    "prompt": "modern farmhouse floating shelves, matte black brackets",
+    "measurements": {"width_in": 72, "height_in": 18, "depth_in": 10, "unit": "in"}
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "source": "stub|decor8",
+  "preview_url": "https://picsum.photos/seed/https%3A%2F%2Fexample.com%2Fuser-upload%2F123.jpg%7Cmodern%20farmhouse%20floatin/1024/768",
+  "echo": {
+    "photo_url": "https://example.com/user-upload/123.jpg",
+    "prompt": "modern farmhouse floating shelves, matte black brackets",
+    "measurements": {
+      "width_in": 72,
+      "height_in": 18,
+      "depth_in": 10,
+      "unit": "in"
+    }
+  }
+}
+```
+
+**Validation Error (400 Bad Request):**
+```bash
+curl -X POST http://localhost:5000/preview \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+Response:
+```json
+{
+  "ok": false,
+  "error": "invalid_payload",
+  "fields_missing": ["photo_url", "prompt"]
+}
+```
+
+**Fields:**
+- `photo_url` (required, string) - URL of the uploaded photo
+- `prompt` (required, string) - User's design prompt/description
+- `measurements` (optional, object) - Room measurements from AR scan
+
+**Features:**
+- ✅ No external API calls - safe for offline/dev use
+- ✅ Deterministic preview URLs (seeded by photo_url + prompt)
+- ✅ Structured JSON logging
+- ✅ Input validation with clear error messages

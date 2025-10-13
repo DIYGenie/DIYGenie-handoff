@@ -175,6 +175,16 @@ Transitions triggered by explicit API calls, not automatic
 
 ## Recent Updates
 
+### October 13, 2025
+**Stubbed Preview Endpoint**
+- Added `POST /preview` - Lightweight stub endpoint for preview generation without external API calls
+- Input validation: `photo_url` (required), `prompt` (required), `measurements` (optional)
+- Returns deterministic fake preview_url using Picsum (seeded by photo_url + prompt)
+- Error handling: 400 on bad payload with `fields_missing` array
+- Structured JSON logging: `{"event":"stub_generate","route":"/preview","source":"stub|decor8","has_measurements":true}`
+- Safe for offline/dev use - no environment variables required
+- Documentation added to README.md with curl examples
+
 ### October 12, 2025
 **Health Endpoint Aliases & Enhancements**
 - Refactored `routes/health.js` to export named handler functions for reusability

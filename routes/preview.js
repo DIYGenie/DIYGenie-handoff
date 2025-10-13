@@ -2,6 +2,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { submitPreviewJob, fetchPreviewStatus, isStub } from '../services/decor8Client.js';
+import { log } from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -52,6 +53,54 @@ async function savePreviewReady(projectId, previewUrl, extras = {}) {
   
   if (error) throw error;
 }
+
+/**
+ * POST /preview
+ * Stub Decor8 preview: validates input and returns a fake preview_url.
+ * No external calls. Safe for offline/dev use.
+ */
+router.post('/preview', (req, res) => {
+  const { photo_url, prompt, measurements } = req.body || {};
+
+  const missing = [];
+  if (!photo_url || typeof photo_url !== 'string') missing.push('photo_url');
+  if (!prompt || typeof prompt !== 'string') missing.push('prompt');
+
+  if (missing.length) {
+    log('preview.validation_error', {
+      route: '/preview',
+      event: 'validation_error',
+      missing,
+    });
+    return res.status(400).json({
+      ok: false,
+      error: 'invalid_payload',
+      fields_missing: missing,
+    });
+  }
+
+  // Deterministic fake preview (seeded by photo_url+prompt hash-ish)
+  const seed = encodeURIComponent((photo_url + '|' + prompt).slice(0, 64));
+  const preview_url = `https://picsum.photos/seed/${seed}/1024/768`;
+
+  log('preview.stub_generate', {
+    route: '/preview',
+    event: 'stub_generate',
+    source: 'stub|decor8',
+    has_measurements: Boolean(measurements && typeof measurements === 'object'),
+  });
+
+  return res.status(200).json({
+    ok: true,
+    source: 'stub|decor8',
+    preview_url,
+    echo: {
+      photo_url,
+      prompt,
+      measurements: measurements || null,
+    },
+  });
+});
 
 router.post('/preview/decor8', async (req, res) => {
   try {

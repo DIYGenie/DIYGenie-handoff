@@ -1,0 +1,122 @@
+Do NOT add deps, rename, or delete files. Use existing utils/logger.js. Confirm structural changes.
+
+Task: Add a stubbed POST /preview endpoint that validates input and returns a deterministic fake preview_url. Log one-line JSON. No external calls. Env vars untouched.
+
+Deliverables:
+
+New file routes/preview.js
+
+Wire it in index.js (mount at /preview)
+
+Minimal unit test (if test harness exists) else skip
+
+curl example in repo README append (or docs/DEV_NOTES.md)
+
+Success criteria:
+
+POST /preview returns 200 with { ok:true, source:"stub|decor8", preview_url: "<url>", echo:{...} }
+
+Input required: photo_url (string), prompt (string). Optional: measurements (object).
+
+Errors: 400 on bad payload (include fields_missing).
+
+Logs via logger.info({ route:"/preview", ... }) with no secrets.
+
+File changes
+
+1) routes/preview.js (NEW – full content)
+
+const express = require('express');
+const router = express.Router();
+const logger = require('../utils/logger');
+
+/**
+ * POST /preview
+ * Stub Decor8 preview: validates input and returns a fake preview_url.
+ * No external calls. Safe for offline/dev use.
+ */
+router.post('/', (req, res) => {
+  const { photo_url, prompt, measurements } = req.body || {};
+
+  const missing = [];
+  if (!photo_url || typeof photo_url !== 'string') missing.push('photo_url');
+  if (!prompt || typeof prompt !== 'string') missing.push('prompt');
+
+  if (missing.length) {
+    logger.info({
+      level: 'info',
+      route: '/preview',
+      event: 'validation_error',
+      missing,
+    });
+    return res.status(400).json({
+      ok: false,
+      error: 'invalid_payload',
+      fields_missing: missing,
+    });
+  }
+
+  // Deterministic fake preview (seeded by photo_url+prompt hash-ish)
+  const seed = encodeURIComponent((photo_url + '|' + prompt).slice(0, 64));
+  const preview_url = `https://picsum.photos/seed/${seed}/1024/768`;
+
+  logger.info({
+    route: '/preview',
+    event: 'stub_generate',
+    source: 'stub|decor8',
+    has_measurements: Boolean(measurements && typeof measurements === 'object'),
+  });
+
+  return res.status(200).json({
+    ok: true,
+    source: 'stub|decor8',
+    preview_url,
+    echo: {
+      photo_url,
+      prompt,
+      measurements: measurements || null,
+    },
+  });
+});
+
+module.exports = router;
+
+
+2) index.js (SAFE minimal diff – mount route)
+
+@@
+ const express = require('express');
+ const app = express();
+ app.use(express.json());
+ 
++// Routes
++const previewRoute = require('./routes/preview');
++app.use('/preview', previewRoute);
+
+Quick tests
+
+Local:
+
+curl -s -X POST http://localhost:3000/preview \
+  -H 'content-type: application/json' \
+  -d '{
+    "photo_url":"https://example.com/user-upload/123.jpg",
+    "prompt":"modern farmhouse floating shelves, matte black brackets",
+    "measurements":{"width_in":72,"height_in":18,"depth_in":10,"unit":"in"}
+  }' | jq
+
+
+Expected: 200 with ok:true, source:"stub|decor8", and a preview_url (picsum seed).
+
+Bad payload:
+
+curl -s -X POST http://localhost:3000/preview -H 'content-type: application/json' -d '{}' | jq
+
+
+Expected: 400 with fields_missing:["photo_url","prompt"].
+
+App hookup (no code changes yet)
+
+From DIYGenieTheme → Preview screen, POST to BASE_URL/preview with the three fields above; render preview_url image on success.
+
+Keep current gating logic unchanged (this is a stub only)
