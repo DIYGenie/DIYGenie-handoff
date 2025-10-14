@@ -72,8 +72,8 @@ function view(profile) {
   };
 }
 
-// POST /entitlements/check  { user_id }
-router.post('/entitlements/check', async (req, res) => {
+// POST /check  { user_id }
+router.post('/check', async (req, res) => {
   const { user_id } = req.body || {};
   if (!user_id) return res.status(400).json({ ok:false, error:'missing_user_id' });
   try {
@@ -88,8 +88,8 @@ router.post('/entitlements/check', async (req, res) => {
   }
 });
 
-// POST /entitlements/consume  { user_id }
-router.post('/entitlements/consume', async (req, res) => {
+// POST /consume  { user_id }
+router.post('/consume', async (req, res) => {
   const { user_id } = req.body || {};
   if (!user_id) return res.status(400).json({ ok:false, error:'missing_user_id' });
   try {

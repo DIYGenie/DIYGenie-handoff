@@ -19,6 +19,13 @@ app.use((req, res, next) => {
   next();
 });
 
+// --- ROUTE MOUNTS (make sure these exist in Production) ---
+app.use('/preview', previewRouter);
+app.use('/plan', planRouter);
+app.use('/entitlements', entitlementsRouter);
+app.use('/health', healthRouter);
+app.use('/version', versionRouter);
+
 const upload = multer({ storage: multer.memoryStorage() });
 
 // Fail fast if Supabase service role key is missing
@@ -1969,13 +1976,6 @@ app.get('/billing/portal-return', (req, res) => {
     `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DIY Genie</title><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:40px auto;padding:20px;line-height:1.5"><h1>Portal closed</h1><p>You can return to the DIY Genie app now.</p><p style="opacity:.7">If this tab didn't close automatically, just switch back to the app.</p></body>`
   );
 });
-
-// --- ROUTE MOUNTS ---
-app.use('/', previewRouter);
-app.use('/plan', planRouter);
-app.use('/', entitlementsRouter);
-app.use('/', healthRouter);
-app.use('/', versionRouter);
 
 // --- Health & Version Aliases under /api ---
 app.get('/api/health', healthGet);

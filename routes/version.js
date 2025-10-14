@@ -19,7 +19,7 @@ export function versionHead(req, res) {
   res.status(200).end();
 }
 
-router.get('/version', versionGet);
-router.head('/version', versionHead);
+router.get('/', versionGet);
+router.head('/', versionHead);
 
 export default router;

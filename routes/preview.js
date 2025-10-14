@@ -56,11 +56,11 @@ async function savePreviewReady(projectId, previewUrl, extras = {}) {
 }
 
 /**
- * POST /preview
+ * POST /
  * Stub Decor8 preview: validates input and returns a fake preview_url.
  * No external calls. Safe for offline/dev use.
  */
-router.post('/preview', (req, res) => {
+router.post('/', (req, res) => {
   const { photo_url, prompt, measurements } = req.body || {};
 
   const missing = [];
@@ -105,7 +105,7 @@ router.post('/preview', (req, res) => {
   });
 });
 
-router.post('/preview/decor8', async (req, res) => {
+router.post('/decor8', async (req, res) => {
   try {
     const { projectId } = req.body || {};
     if (!projectId) return res.status(400).json({ ok:false, error:'projectId required' });
@@ -132,7 +132,7 @@ router.post('/preview/decor8', async (req, res) => {
   }
 });
 
-router.get('/preview/status/:projectId', async (req, res) => {
+router.get('/status/:projectId', async (req, res) => {
   try {
     const { projectId } = req.params;
     const p = await getProject(projectId);
@@ -163,7 +163,7 @@ router.get('/preview/status/:projectId', async (req, res) => {
 });
 
 // Diagnostics for quick checks
-router.get('/selftest/preview/:projectId', async (req, res) => {
+router.get('/selftest/:projectId', async (req, res) => {
   try {
     const { projectId } = req.params;
     const p = await getProject(projectId);

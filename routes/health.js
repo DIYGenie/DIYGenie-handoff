@@ -108,15 +108,15 @@ export function healthHead(req, res) {
 }
 
 // Mount handlers on router
-router.get('/health', healthGet);
-router.get('/health/live', liveGet);
-router.get('/health/ready', readyGet);
-router.get('/health/full', fullGet);
+router.get('/', healthGet);
+router.get('/live', liveGet);
+router.get('/ready', readyGet);
+router.get('/full', fullGet);
 
 // HEAD handlers
-router.head('/health', healthHead);
-router.head('/health/live', healthHead);
-router.head('/health/ready', healthHead);
-router.head('/health/full', healthHead);
+router.head('/', healthHead);
+router.head('/live', healthHead);
+router.head('/ready', healthHead);
+router.head('/full', healthHead);
 
 export default router;
