@@ -1,6 +1,7 @@
 // routes/preview.js
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
+import { createHash } from 'crypto';
 import { submitPreviewJob, fetchPreviewStatus, isStub } from '../services/decor8Client.js';
 import { log } from '../utils/logger.js';
 
@@ -79,8 +80,10 @@ router.post('/preview', (req, res) => {
     });
   }
 
-  // Build deterministic stub URL (seeded) — FULLY ENCODED, NO TRUNCATION
-  const seed = encodeURIComponent(`${photo_url}|${prompt}`.trim());
+  // Build deterministic stub URL using a short, iOS-safe seed:
+  // Use SHA-1 hex of (photo_url|prompt) to avoid very long/encoded seeds that iOS Image chokes on.
+  const seedRaw = `${photo_url}|${prompt}`.trim();
+  const seed = createHash('sha1').update(seedRaw).digest('hex'); // e.g. "a94a8fe5ccb19ba61c4c..."
   const previewUrl = `https://picsum.photos/seed/${seed}/1024/768`;
 
   log('preview.stub_generate', {
@@ -93,7 +96,7 @@ router.post('/preview', (req, res) => {
   return res.status(200).json({
     ok: true,
     source: 'stub|decor8',
-    preview_url: previewUrl, // e.g. https://picsum.photos/seed/https%3A%2F%2F.../1024/768
+    preview_url: previewUrl,
     echo: {
       photo_url,
       prompt,
