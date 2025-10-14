@@ -1970,19 +1970,11 @@ app.get('/billing/portal-return', (req, res) => {
   );
 });
 
-// --- Mount Preview Router ---
+// --- ROUTE MOUNTS ---
 app.use('/', previewRouter);
-
-// --- Mount Plan Router ---
 app.use('/plan', planRouter);
-
-// --- Mount Entitlements Router ---
 app.use('/', entitlementsRouter);
-
-// --- Mount Health Router ---
 app.use('/', healthRouter);
-
-// --- Mount Version Router ---
 app.use('/', versionRouter);
 
 // --- Health & Version Aliases under /api ---
