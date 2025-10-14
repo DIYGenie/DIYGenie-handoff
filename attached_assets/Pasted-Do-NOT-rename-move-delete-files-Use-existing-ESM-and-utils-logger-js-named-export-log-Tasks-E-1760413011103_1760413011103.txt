@@ -1,3 +1,10 @@
+Do NOT rename/move/delete files. Use existing ESM and utils/logger.js (named export log).
+
+Tasks / Edits:
+
+Create routes/plan.js (ESM, full content):
+
+// routes/plan.js
 import express from 'express';
 import { log } from '../utils/logger.js';
 
@@ -14,7 +21,6 @@ router.post('/', (req, res) => {
   const missing = [];
   if (!photo_url || typeof photo_url !== 'string') missing.push('photo_url');
   if (!prompt || typeof prompt !== 'string') missing.push('prompt');
-
   if (missing.length) {
     log('plan_validation_error', { route: '/plan', missing });
     return res.status(400).json({ ok: false, error: 'invalid_payload', fields_missing: missing });
@@ -89,3 +95,17 @@ router.post('/', (req, res) => {
 });
 
 export default router;
+
+
+Mount in index.js (minimal diff):
+
+@@
+ import express from 'express';
+ const app = express();
+ app.use(express.json());
+
+ import previewRoute from './routes/preview.js';
+ app.use('/preview', previewRoute);
+ 
++import planRoute from './routes/plan.js';
++app.use('/plan', planRoute);

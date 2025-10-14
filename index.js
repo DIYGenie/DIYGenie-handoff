@@ -1974,7 +1974,7 @@ app.get('/billing/portal-return', (req, res) => {
 app.use('/', previewRouter);
 
 // --- Mount Plan Router ---
-app.use('/', planRouter);
+app.use('/plan', planRouter);
 
 // --- Mount Entitlements Router ---
 app.use('/', entitlementsRouter);
