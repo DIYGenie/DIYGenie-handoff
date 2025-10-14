@@ -79,9 +79,9 @@ router.post('/preview', (req, res) => {
     });
   }
 
-  // Deterministic fake preview (seeded by photo_url+prompt hash-ish)
-  const seed = encodeURIComponent((photo_url + '|' + prompt).slice(0, 64));
-  const preview_url = `https://picsum.photos/seed/${seed}/1024/768`;
+  // Build deterministic stub URL (seeded) — FULLY ENCODED, NO TRUNCATION
+  const seed = encodeURIComponent(`${photo_url}|${prompt}`.trim());
+  const previewUrl = `https://picsum.photos/seed/${seed}/1024/768`;
 
   log('preview.stub_generate', {
     route: '/preview',
@@ -93,7 +93,7 @@ router.post('/preview', (req, res) => {
   return res.status(200).json({
     ok: true,
     source: 'stub|decor8',
-    preview_url,
+    preview_url: previewUrl, // e.g. https://picsum.photos/seed/https%3A%2F%2F.../1024/768
     echo: {
       photo_url,
       prompt,
