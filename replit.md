@@ -1,11 +1,9 @@
 # DIY Genie Webhooks Backend
 
 ## Overview
-
-Express.js API backend for DIY Genie, a home improvement project management application. The system handles project creation, image uploads, AI-powered preview generation, and plan building with tiered subscription features. Built on Supabase for data storage and integrates with Decor8 (AI design previews) and OpenAI (plan generation) via configurable feature flags.
+The DIY Genie Webhooks Backend is an Express.js API designed for the DIY Genie home improvement project management application. Its core purpose is to manage project lifecycles, including creation, image uploads, AI-powered design preview generation, and detailed plan building. The system supports tiered subscription models with varying feature access and integrates with external AI services for design and planning. The overarching business vision is to provide a comprehensive, AI-assisted platform for home improvement enthusiasts to plan and execute projects efficiently.
 
 ## User Preferences
-
 Preferred communication style: Simple, everyday language.
 
 ## System Architecture
@@ -18,300 +16,35 @@ Preferred communication style: Simple, everyday language.
 - **File Processing**: Multer for multipart/form-data handling
 
 ### API Design Pattern
-Non-blocking asynchronous processing for resource-intensive operations:
-- Immediate response to client requests (returns `{ok: true}`)
-- Background processing using `setTimeout` for state transitions
-- Polling-based status checks via GET endpoints
-- Always returns JSON (never HTML errors)
+The API employs a non-blocking asynchronous processing model, providing immediate client responses and handling resource-intensive operations in the background. Status checks are polling-based, and all responses are consistently JSON.
 
 ### Authentication & Authorization
-- Service-level authentication using Supabase service role key (bypasses RLS)
-- **User identification**: `user_id` required in request body (must be valid UUID)
-- Profile auto-created via upsert on first project creation (default tier: 'free')
-- No JWT validation at API layer (handled by client/Supabase)
-- Projects and builds are saved with the actual user's ID from the app
+Service-level authentication is managed via a Supabase service role key, bypassing Row Level Security. User identification is based on a `user_id` (UUID) provided in the request body. Projects and builds are associated with the authenticated user's ID.
 
 ### Subscription Tiers & Entitlements
-Three-tier system with quota-based restrictions:
-
-**Free Tier**
-- Project quota: 2
-- Preview generation: Not allowed
-- Plan generation: Allowed
-
-**Casual Tier**
-- Project quota: 5
-- Preview generation: Allowed
-- Plan generation: Allowed
-
-**Pro Tier**
-- Project quota: 25
-- Preview generation: Allowed
-- Plan generation: Allowed
-
-Entitlement enforcement:
-- Quota checked before project creation
-- Remaining count calculated: `quota - used`
-- Preview access gated by `previewAllowed` flag
-- Profile auto-creation with 'free' tier if user doesn't exist
+The system supports three tiers: Free, Casual, and Pro, each with specific project quotas, preview generation access, and plan generation capabilities. Entitlements are enforced by checking quotas and feature flags before project creation or feature usage.
 
 ### Data Model
-**Projects Table** (core entity):
-- `id` (UUID, primary key)
-- `user_id` (UUID, foreign key to profiles)
-- `name` (text)
-- `status` (text): 'new' → 'draft' → 'preview_requested' → 'preview_ready' → 'planning' → 'plan_ready'
-- `input_image_url` (text, nullable)
-- `preview_url` (text, nullable) - Legacy preview URL
-- `preview_status` (text, nullable) - New: 'done' when preview ready
-- `preview_meta` (jsonb, nullable) - New: Preview metadata (model, roi, etc)
-- `plan_json` (jsonb, nullable)
-- `completed_steps` (integer array, for progress tracking)
-- `current_step_index` (integer, for progress tracking)
-- `is_demo` (boolean, default false) - Marks sample projects that don't count against quotas
-
-**Profiles Table** (user subscription data):
-- `user_id` (UUID, primary key)
-- `plan_tier` (text): 'free' | 'casual' | 'pro'
-- `stripe_customer_id` (text)
-- `stripe_subscription_id` (text)
-- `stripe_subscription_status` (text)
-- `current_period_end` (timestamp)
-
-**Room Scans Table** (AR scan data):
-- `id` (UUID, primary key)
-- `project_id` (UUID, foreign key to projects)
-- `roi` (jsonb, nullable - region of interest)
-- `measure_status` (text, nullable - measurement processing status)
-- `measure_result` (jsonb, nullable - measurement output)
+- **Projects Table**: Manages core project data including `id`, `user_id`, `name`, `status` (lifecycle stages), `input_image_url`, `preview_url`, `preview_status`, `preview_meta`, `plan_json`, `completed_steps`, `current_step_index`, and `is_demo`.
+- **Profiles Table**: Stores user subscription details including `user_id`, `plan_tier`, and Stripe-related IDs and statuses.
+- **Room Scans Table**: Stores AR scan data associated with projects, including `id`, `project_id`, `roi`, `measure_status`, and `measure_result`.
 
 ### Feature Flags & Provider Pattern
-Pluggable architecture for AI services with stub fallbacks:
-
-**Preview Generation** (`PREVIEW_PROVIDER`):
-- `stub` (default): 5-second delay, uses input image as preview
-- `decor8`: Calls Decor8 API `/generate_designs_for_room`, falls back to stub on error
-
-**Plan Generation** (`PLAN_PROVIDER`):
-- `stub` (default): 1.5-second delay, no plan data
-- `openai`: GPT-4 JSON generation, falls back to stub on error
-
-Rationale: Allows development/testing without API keys, graceful degradation in production
+A pluggable architecture using feature flags (`PREVIEW_PROVIDER`, `PLAN_PROVIDER`) allows switching between stub implementations (for development/fallback) and live AI services (Decor8 for previews, OpenAI for plans). This ensures graceful degradation and flexible service integration.
 
 ### Image Upload Strategy
-Dual-mode image acceptance:
-1. **Multipart upload**: File buffer → Supabase Storage → public URL
-2. **Direct URL**: Client provides pre-uploaded URL directly
-
-Storage path pattern: `projects/{projectId}/{timestamp}.{ext}`
-CORS-enabled public bucket for client access
-
-### CORS Configuration
-Permissive development setup:
-- Origin: Dynamic (accepts all origins via callback)
-- Methods: GET, POST, PATCH, OPTIONS
-- Headers: Content-Type, Authorization
-- Explicit headers set for compatibility
+The system supports two methods for image uploads: direct multipart file upload to Supabase Storage and acceptance of pre-uploaded image URLs provided by the client.
 
 ### Error Handling
-Consistent JSON error responses:
-```javascript
-{ ok: false, error: "error_message" }
-```
-- HTTP status codes: 400 (bad request), 403 (forbidden), 500 (server error), 502 (external service error)
-- Never returns HTML error pages
-- Logs all requests: `[REQ] METHOD /path`
+Errors are returned as consistent JSON objects (`{ ok: false, error: "error_message" }`) with appropriate HTTP status codes (e.g., 400, 403, 500), avoiding HTML error pages.
 
 ### State Machine Pattern
-Project lifecycle managed through status field:
-1. **new** → Initial creation
-2. **draft** → Image uploaded
-3. **preview_requested** → Preview generation triggered
-4. **preview_ready** → Preview URL available
-5. **planning** → Plan generation triggered
-6. **plan_ready** → Plan JSON available
-
-Transitions triggered by explicit API calls, not automatic
+Project lifecycle is managed via a `status` field in the Projects table, transitioning through states like `new`, `draft`, `preview_requested`, `preview_ready`, `planning`, and `plan_ready`, triggered by explicit API calls.
 
 ## External Dependencies
 
-### Supabase
-- **Service**: PostgreSQL database + object storage
-- **Authentication**: Service role key for server-side operations
-- **Usage**: Primary data store, file uploads
-- **Environment**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`
-
-### Stripe
-- **Service**: Payment processing and subscription management
-- **Integration**: Webhook-based subscription lifecycle
-- **Events Handled**: 
-  - `checkout.session.completed` → Create customer/subscription
-  - `customer.subscription.*` → Update subscription status
-  - `customer.subscription.deleted` → Downgrade to free tier
-- **Environment**: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CASUAL_PRICE_ID`, `PRO_PRICE_ID`
-
-### Decor8 AI
-- **Service**: AI-powered interior design preview generation
-- **Endpoint**: `POST /generate_designs_for_room`
-- **Input**: `input_image_url`, `room_type`, `design_style`, `num_images`
-- **Authentication**: Bearer token
-- **Environment**: `DECOR8_BASE_URL`, `DECOR8_API_KEY`
-- **Fallback**: Stub mode returns input image after delay
-
-### OpenAI
-- **Service**: GPT-4 for structured plan generation
-- **Model**: Configurable (default: gpt-4o-mini)
-- **Output**: JSON plan with steps and materials
-- **Environment**: `OPENAI_API_KEY`, `OPENAI_MODEL`
-- **Fallback**: Stub mode returns empty plan after delay
-
-### NPM Packages
-- `express` (^5.1.0) - Web framework
-- `@supabase/supabase-js` (^2.58.0) - Supabase client
-- `multer` (^2.0.2) - Multipart form parsing
-- `stripe` (^18.5.0) - Payment processing
-- `cors` (^2.8.5) - CORS middleware
-- `@stripe/stripe-js` (^7.9.0) - Stripe frontend utilities
-- `@stripe/react-stripe-js` (^4.0.2) - Stripe React components
-
-## Recent Updates
-
-### October 16, 2025
-**Demo Project Feature - "Try a Sample Project"**
-- Migration: `migrations/20251016_add_is_demo.sql` - Adds `is_demo` boolean column to projects table
-- Added `POST /api/demo-project` - Creates or fetches demo project for users (index.js:901)
-- Idempotent: Returns existing demo if already created, creates new if missing
-- Demo data: Full "Modern Floating Shelves" project with complete plan_json
-- Status: `plan_ready` (immediately viewable)
-- Images: Stable Unsplash CDN URLs (before/after)
-- Quota exclusion: Demo projects don't count against user limits (is_demo=true)
-- One demo per user: Only one sample project allowed per user_id
-- Documentation: Added to API_MAP.md with full specification
-- Implementation guide: DEMO_PROJECT_IMPLEMENTATION.md with deployment steps
-
-**GET Plan Endpoint - Production Ready**
-- Added `GET /api/projects/:id/plan` - Returns frozen 10-field schema for Plan screen (index.js:1242)
-- Schema fields: projectId, summary, preview, materials, tools, cutList, steps, safety, permits, quota
-- Intelligent data mapping: Parses time/cost strings, categorizes tools, auto-numbers steps
-- Performance: Response under 1.5 MB, uses URLs (no inline blobs), single optimized query
-- Error handling: 404 (not found), 500 (server errors), graceful quota fallback
-- Quota integration: Returns user's tier, plans used/limit from profiles table
-- Documentation: Complete specification in API_MAP.md with sample curls
-- Implementation guide: PLAN_ENDPOINT_IMPLEMENTATION.md with testing results
-
-### October 13, 2025
-**Entitlements System with Credit Tracking**
-- Added `routes/entitlements.js` - Credit-based usage tracking with monthly rollover
-- Added `POST /entitlements/check` - Check user's quota, used credits, and remaining credits
-- Added `POST /entitlements/consume` - Consume one credit with optimistic concurrency control
-- Monthly rollover: Automatically resets `plan_credits_used_month` to 0 when `credits_month_key` changes from current month
-- Optimistic updates: Uses PostgREST filters (`credits_month_key=eq.{YYYYMM}&plan_credits_used_month=eq.{current}`) to prevent race conditions
-- Retry logic: On conflict, refetches and retries once; returns 409 if still conflicted
-- Error handling: 400 (missing user_id), 402 (quota_exhausted), 409 (consume_conflict), 500 (server error)
-- Structured JSON logging: `{"event":"entitlements_check","user_id":"...","out":{...}}` and `{"event":"entitlements_consume_ok","out":{...}}`
-- Uses native fetch with Supabase REST API (no Supabase JS client dependency in route)
-- Database columns added to profiles: `subscription_tier`, `plan_quota_monthly`, `plan_credits_used_month`, `credits_month_key`, `is_subscribed`
-- Documentation added to README.md with curl examples
-
-**Stubbed Plan Endpoint**
-- Added `POST /plan` - Lightweight stub endpoint for plan generation without external API calls
-- Input validation: `photo_url` (required), `prompt` (required), `measurements` (optional)
-- Returns complete plan schema with materials, tools, cut_list, steps, safety notes, and cost estimation
-- Deterministic content seeded by prompt length (style variations: modern/coastal/farmhouse)
-- Cost estimation logic: `grand_total = (materials_total + tools_total) * (1 + contingency_pct)` where contingency_pct = 0.12
-- Error handling: 400 on bad payload with `fields_missing` array
-- Structured JSON logging: `{"event":"stub_generate","route":"/plan","source":"stub|openai","style":"modern","has_measurements":true}`
-- Safe for offline/dev use - no environment variables required
-- Documentation added to README.md with curl examples and schema details
-
-**Stubbed Preview Endpoint**
-- Added `POST /preview` - Lightweight stub endpoint for preview generation without external API calls
-- Input validation: `photo_url` (required), `prompt` (required), `measurements` (optional)
-- Returns deterministic fake preview_url using Picsum (seeded by photo_url + prompt)
-- Error handling: 400 on bad payload with `fields_missing` array
-- Structured JSON logging: `{"event":"stub_generate","route":"/preview","source":"stub|decor8","has_measurements":true}`
-- Safe for offline/dev use - no environment variables required
-- Documentation added to README.md with curl examples
-
-### October 12, 2025
-**Health Endpoint Aliases & Enhancements**
-- Refactored `routes/health.js` to export named handler functions for reusability
-- Created `routes/version.js` - Version information endpoints
-- Added `/api/*` aliases for all health endpoints (`/api/health`, `/api/health/ready`, `/api/health/full`)
-- Added `HEAD` support for all health and version endpoints (lightweight checks)
-- Added CORS headers (`Access-Control-Allow-Origin: *`) to all health/version responses
-- Added `GET /version` and `GET /api/version` - Service version info
-- Structured logging for alias requests: `{"event":"health.alias","path":"/api/health/full","status":200}`
-- All endpoints tested and verified - 16 health endpoints + 4 version endpoints = 20 total
-
-**Health Endpoints & Structured Logging**
-- Created `utils/logger.js` - Structured JSON logger with secret redaction
-- Created `routes/health.js` - Comprehensive health check endpoints
-- Added `GET /health` - Basic health status with version and uptime
-- Added `GET /health/live` - Kubernetes liveness probe
-- Added `GET /health/ready` - Readiness check with DB and env validation
-- Added `GET /health/full` - Full diagnostics with mode flags, version info, and env summary
-- Mode detection: Shows `decor8: stub|live` and `openai: stub|live` based on env vars
-- Structured logging: Single-line JSON logs with timestamp, event, and payload
-- Secret redaction: Masks API keys and sensitive env vars in health responses
-
-**End-to-End Preview Flow with Service Architecture**
-- Created `services/decor8Client.js` - Centralized Decor8 API service with stub fallback
-- Created `routes/preview.js` - Modular preview router with Supabase integration
-- Added `POST /preview/decor8` - Submit preview job with AR context forwarding
-- Added `GET /preview/status/:projectId` - Poll job status with auto-save on ready
-- Added `GET /selftest/preview/:projectId` - Diagnostic endpoint for troubleshooting
-- Mode detection: Stub (development) vs Live (production) based on `DECOR8_BASE_URL`
-- AR context support: Forwards `scale_px_per_in` and `dimensions_json` when available
-- Comprehensive logging: `[preview submit]`, `[preview poll]` at each step
-- Installed `node-fetch` for HTTP requests in service layer
-
-**Plan Normalization & Persistence**
-- Added `mapPlanToNormalized()` helper - Ensures consistent plan structure with overview, materials, tools, cuts, and steps
-- Added `savePlan(projectId, plan)` helper - Normalizes and saves plan with status update to 'active'
-- Added `GET /selftest/plan/:projectId` - Diagnostic endpoint returning counts and top-level keys
-- Added `PATCH /projects/:projectId/plan` - Ingest raw plan data and normalize before saving
-- Plan structure guarantees:
-  - `overview`: { title, est_time, est_cost, skill, notes }
-  - `materials`: Array of { name, qty, notes }
-  - `tools`: Array of { name, notes }
-  - `cuts`: Array of { item, size, qty, notes }
-  - `steps`: Array of { order, text, notes } (auto-sorted by order)
-- Coerces falsy/missing to empty arrays, filters out empty entries
-- Verbose logging: `[plan map]` with counts, `[plan save]` with upsert confirmation
-
-**Admin Endpoints**
-- Added `PATCH /api/projects/:projectId` - Secure project update with whitelist (status, name, preview_url)
-- Added `DELETE /api/admin/purge-test-data` - User-based data purge with dry-run support
-- Auth: Header-based `x-admin-token` for admin endpoints
-- Returns 401 for unauthorized, 400 for missing params, 403 for forbidden
-
-### October 11, 2025
-**Real Decor8 AI Integration for Preview Generation**
-- Migrated from stub to production Decor8 API integration
-- Added `POST /api/projects/:projectId/preview/start` - Starts async preview generation job (returns 202 with jobId)
-- Added `GET /api/projects/:projectId/preview/status` - Polls job status and auto-updates DB when done
-- Migration: `migrations/add_preview_job_id.sql` adds preview_job_id column to projects table
-- Background polling pattern: Client polls status endpoint, server fetches Decor8 job status and updates DB
-- Status flow: queued → processing → done (or error)
-- Helper functions: `callDecor8Status()`, `getProjectForUser()`, `updatePreviewState()`
-- Auth: Uses getProjectForUser helper with ownership verification
-- Removed debug endpoint `/debug/decor8` after successful verification
-
-**Measurement Endpoints Fix**
-- Fixed PostgREST "more than one relationship" error by replacing embedded queries with explicit separate queries
-- Both measure endpoints now use `.maybeSingle()` instead of `.single()` for better error handling
-- Improved error codes: 400 (missing params), 403 (forbidden), 404 (not found), 409 (not ready)
-
-### October 10, 2025
-**Measurement Endpoints for AR Scans**
-- Added `POST /api/projects/:projectId/scans/:scanId/measure` - Trigger measurement with optional ROI
-- Added `GET /api/projects/:projectId/scans/:scanId/measure/status` - Check measurement status
-- Stub implementation returns immediate result: `{px_per_in: 15.0, width_in: 48, height_in: 30}`
-- Auth: Verifies scan belongs to project via room_scans.project_id
-- Migration: `migrations/add_measurement_columns.sql` adds measure_status and measure_result to room_scans
-- Test: `tests/measure.test.sh` for endpoint validation
-
-**Plan Management Enhancement**
-- Added `POST /api/projects/:id/plan` for updating project plans with structured JSON
-- Modified `GET /api/projects/:id/plan` to include status in response (no longer 409 blocks)
+- **Supabase**: Primary database (PostgreSQL) and object storage.
+- **Stripe**: Payment processing and subscription management via webhooks for `checkout.session.completed`, `customer.subscription.*`, and `customer.subscription.deleted` events.
+- **Decor8 AI**: AI-powered interior design preview generation service, integrated via a POST endpoint.
+- **OpenAI**: GPT-4 for structured plan generation, used for producing JSON plans.
+- **NPM Packages**: Key packages include `express`, `@supabase/supabase-js`, `multer`, `stripe`, `cors`, `@stripe/stripe-js`, and `@stripe/react-stripe-js`.
