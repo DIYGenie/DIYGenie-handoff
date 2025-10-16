@@ -305,6 +305,81 @@ curl -X POST https://your-api.com/api/projects \
 
 ---
 
+### POST /api/demo-project
+- **Handler file:** `index.js:901`
+- **Auth:** none (requires user_id in body)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "user_id": "uuid-string-required"
+}
+```
+- **Response (success):** `200 { ok: true, item: {...}, existed: boolean }`
+  - `item`: Project object with `id`, `name`, `status`, `input_image_url`, `preview_url`
+  - `existed`: `true` if demo already existed, `false` if newly created
+- **Response (errors):**
+  - `400 { ok: false, error: "user_id_required" }` - Missing user_id
+  - `500 { ok: false, error: "database_error" }` - Database query failed
+  - `500 { ok: false, error: "insert_failed" }` - Failed to create demo project
+  - `500 { ok: false, error: "server_error" }` - Unexpected error
+- **Side effects:** 
+  - Checks for existing demo project (`is_demo=true`)
+  - If none exists: upserts `profiles`, inserts demo project with full `plan_json`
+  - Sets `is_demo=true`, `status=plan_ready`
+  - Uses stable Unsplash images for before/after
+- **Logs/phrases:** 
+  - `[POST /api/demo-project] user_id=...`
+  - `[demo-project] Returning existing demo: <id>`
+  - `[demo-project] Created new demo: <id>`
+- **Special notes:**
+  - Demo project does NOT count against user quotas
+  - Only ONE demo per user (idempotent - returns existing if called again)
+  - Includes pre-populated plan data: Modern Floating Shelves project
+  - Demo can be deleted and recreated by calling endpoint again
+  - **IMPORTANT:** Requires `is_demo` column in database (see migration: `migrations/20251016_add_is_demo.sql`)
+
+**Sample (create or fetch):**
+```bash
+curl -X POST http://localhost:5000/api/demo-project \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"550e8400-e29b-41d4-a716-446655440001"}'
+```
+
+**Sample Response (newly created):**
+```json
+{
+  "ok": true,
+  "item": {
+    "id": "abc123-...",
+    "name": "Modern Floating Shelves (Demo)",
+    "status": "plan_ready",
+    "input_image_url": "https://images.unsplash.com/photo-1582582429416-456273091821?q=80&w=1200...",
+    "preview_url": "https://images.unsplash.com/photo-1549187774-b4e9b0445b41?q=80&w=1200..."
+  },
+  "existed": false
+}
+```
+
+**Sample Response (already exists):**
+```json
+{
+  "ok": true,
+  "item": {
+    "id": "abc123-...",
+    "name": "Modern Floating Shelves (Demo)",
+    "status": "plan_ready",
+    "input_image_url": "https://images.unsplash.com/...",
+    "preview_url": "https://images.unsplash.com/..."
+  },
+  "existed": true
+}
+```
+
+---
+
 ### POST /api/projects/:id/image
 - **Handler file:** `index.js:780`
 - **Auth:** none
