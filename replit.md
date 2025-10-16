@@ -68,6 +68,7 @@ Entitlement enforcement:
 - `plan_json` (jsonb, nullable)
 - `completed_steps` (integer array, for progress tracking)
 - `current_step_index` (integer, for progress tracking)
+- `is_demo` (boolean, default false) - Marks sample projects that don't count against quotas
 
 **Profiles Table** (user subscription data):
 - `user_id` (UUID, primary key)
@@ -174,6 +175,29 @@ Transitions triggered by explicit API calls, not automatic
 - `@stripe/react-stripe-js` (^4.0.2) - Stripe React components
 
 ## Recent Updates
+
+### October 16, 2025
+**Demo Project Feature - "Try a Sample Project"**
+- Migration: `migrations/20251016_add_is_demo.sql` - Adds `is_demo` boolean column to projects table
+- Added `POST /api/demo-project` - Creates or fetches demo project for users (index.js:901)
+- Idempotent: Returns existing demo if already created, creates new if missing
+- Demo data: Full "Modern Floating Shelves" project with complete plan_json
+- Status: `plan_ready` (immediately viewable)
+- Images: Stable Unsplash CDN URLs (before/after)
+- Quota exclusion: Demo projects don't count against user limits (is_demo=true)
+- One demo per user: Only one sample project allowed per user_id
+- Documentation: Added to API_MAP.md with full specification
+- Implementation guide: DEMO_PROJECT_IMPLEMENTATION.md with deployment steps
+
+**GET Plan Endpoint - Production Ready**
+- Added `GET /api/projects/:id/plan` - Returns frozen 10-field schema for Plan screen (index.js:1242)
+- Schema fields: projectId, summary, preview, materials, tools, cutList, steps, safety, permits, quota
+- Intelligent data mapping: Parses time/cost strings, categorizes tools, auto-numbers steps
+- Performance: Response under 1.5 MB, uses URLs (no inline blobs), single optimized query
+- Error handling: 404 (not found), 500 (server errors), graceful quota fallback
+- Quota integration: Returns user's tier, plans used/limit from profiles table
+- Documentation: Complete specification in API_MAP.md with sample curls
+- Implementation guide: PLAN_ENDPOINT_IMPLEMENTATION.md with testing results
 
 ### October 13, 2025
 **Entitlements System with Credit Tracking**
