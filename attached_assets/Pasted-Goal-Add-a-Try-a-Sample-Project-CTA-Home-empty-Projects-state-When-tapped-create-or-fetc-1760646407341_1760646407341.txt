@@ -1,0 +1,191 @@
+Goal:
+
+Add a “Try a Sample Project” CTA (Home + empty Projects state).
+
+When tapped: create (or fetch if it already exists) a per-user demo project with full mock data.
+
+Mark it with is_demo=true so it’s easy to ignore in analytics or allow free deletion without affecting quotas.
+
+Please do the following exactly:
+
+DB: add is_demo column (safe, idempotent)
+
+Create migration supabase/migrations/xxxx_add_is_demo.sql with:
+
+-- add column if missing
+alter table public.projects
+  add column if not exists is_demo boolean not null default false;
+
+-- optional: speed up lookups per user
+create index if not exists idx_projects_owner_demo
+on public.projects (owner_id, is_demo);
+
+
+Client types
+
+If present, update our project type so it includes is_demo?: boolean.
+File: app/types/plan.ts (or the shared project type you added earlier).
+
+Demo factory + API helpers
+
+Add app/lib/sample.ts:
+
+export const DEMO_PROJECT_SEED = (userId: string) => ({
+  name: 'Modern Floating Shelves (Demo)',
+  description: 'A sample project to explore the full plan experience.',
+  owner_id: userId,
+  is_demo: true,
+  // light, durable public images so the app never breaks
+  before: 'https://images.unsplash.com/photo-1582582429416-456273091821?q=80&w=1200&auto=format&fit=crop',
+  preview: 'https://images.unsplash.com/photo-1549187774-b4e9b0445b41?q=80&w=1200&auto=format&fit=crop',
+  // any other fields your table expects; leave nullables out
+});
+
+export const DEMO_PLAN_PAYLOAD = {
+  summary: {
+    title: 'Modern Floating Shelves',
+    estTimeHours: 4,
+    estCostUsd: 85,
+    steps: 5,
+    overview: 'Build clean, minimalist shelves with concealed brackets.',
+    safety: [
+      'Wear eye and hearing protection.',
+      'Use anchors appropriate for your wall type.',
+      'Confirm no electrical/plumbing behind drill points.',
+    ],
+    permits: ['Check local building codes for structural modifications.'],
+  },
+  materials: [
+    { name: `Birch plywood 3/4" (4x8)`, qty: 1, unit: 'sheet', price: 68 },
+    { name: 'Edge banding 3/4"', qty: 1, unit: 'ea', price: 7.5 },
+    { name: 'White L-brackets', qty: 4, unit: 'ea', price: 36 },
+    { name: 'Wood screws #8 × 1-1/4"', qty: 1, unit: 'lb', price: 6 },
+    { name: 'Wall anchors', qty: 8, unit: 'ea', price: 4.8 },
+  ],
+  tools: {
+    required: ['Drill/driver', 'Stud finder', 'Level (24")'],
+    optional: [],
+  },
+  cuts: [
+    // keep minimal; your screen already handles empty safely
+  ],
+  steps: [
+    { title: 'Plan & mark studs', detail: 'Mark stud locations; decide shelf heights.' },
+    { title: 'Cut shelves', detail: 'Rip plywood to depth; crosscut to length.' },
+    { title: 'Pre-drill brackets', detail: 'Lay out and pre-drill for mounting.' },
+    { title: 'Mount brackets', detail: 'Hit studs or use anchors; check level.' },
+    { title: 'Install shelves', detail: 'Secure, edge-band, and finish.' },
+  ],
+};
+
+
+In app/lib/api.ts, add:
+
+import { createClient } from '@supabase/supabase-js'; // if not already
+import { DEMO_PROJECT_SEED, DEMO_PLAN_PAYLOAD } from './sample';
+
+export async function ensureDemoProject(userId: string) {
+  const sb = getSupabase(); // use your existing helper to get the authed client
+  // 1) check if demo exists
+  const { data: existing, error: checkErr } = await sb
+    .from('projects')
+    .select('id')
+    .eq('owner_id', userId)
+    .eq('is_demo', true)
+    .limit(1)
+    .maybeSingle();
+  if (checkErr) throw checkErr;
+  if (existing?.id) return existing.id;
+
+  // 2) create
+  const seed = DEMO_PROJECT_SEED(userId);
+  const { data: created, error: insErr } = await sb
+    .from('projects')
+    .insert(seed)
+    .select('id')
+    .single();
+  if (insErr) throw insErr;
+
+  // 3) attach plan blob via your webhook plan table or cache store
+  // If your /api/projects/:id/plan endpoint derives on the fly, skip this.
+  // If you persist, insert to your plan cache table here.
+  try {
+    await sb.from('project_plan_cache')
+      .insert({ project_id: created.id, payload: DEMO_PLAN_PAYLOAD })
+      .select('project_id')
+      .single();
+  } catch { /* table may not exist; safe to ignore */ }
+
+  return created.id;
+}
+
+
+Note: If you don’t have project_plan_cache, the API already synthesizes the plan, so step 3 is a no-op and safely ignored.
+
+UI: add CTA on Home + empty Projects
+
+app/screens/HomeScreen.js (or .tsx): under the hero and before templates, add a secondary button labeled “Try a Sample Project” that calls a new handler handleTrySample().
+
+app/screens/ProjectsScreen.js empty state: show the same button.
+
+Add handler in both screens (reuse a helper hook if you prefer):
+
+import { useNavigation } from '@react-navigation/native';
+import { ensureDemoProject } from '../lib/api';
+import { getCurrentUserId } from '../lib/auth'; // your existing auth helper
+
+async function handleTrySample(navigation) {
+  try {
+    const userId = await getCurrentUserId();
+    const projectId = await ensureDemoProject(userId);
+    // Go straight to Details so they can open the full guide
+    navigation.navigate('ProjectDetails', { id: projectId });
+  } catch (e) {
+    console.error('[sample project] failed', e);
+    alert('Could not create sample project. Please try again.');
+  }
+}
+
+
+Wire to your button:
+
+<Pressable onPress={() => handleTrySample(navigation)} style={styles.secondaryCta}>
+  <Text style={styles.secondaryCtaText}>Try a Sample Project</Text>
+</Pressable>
+
+
+Gating (won’t count against quota)
+
+Wherever you enforce monthly plan limits, skip demo projects:
+
+If you compute counts with select(...).eq('owner_id', uid), add .eq('is_demo', false).
+
+In UI where you show remaining projects, exclude demo.
+
+Delete behavior
+
+Your new delete works already; allow deleting the demo too. If you want it “re-creatable,” the CTA will just re-seed.
+
+QA checklist
+
+Build & run on device:
+
+Home shows Try a Sample Project button.
+
+Tapping creates one demo, subsequent taps re-open it (no duplicates).
+
+Demo appears in Projects list with full data; “Open Detailed Build Plan” renders all sections.
+
+Quota numbers don’t decrease from creating the demo.
+
+Deleting the demo removes it; tapping CTA re-creates it.
+
+Deliverables
+
+Migration file + updated types.
+
+app/lib/sample.ts, ensureDemoProject() in app/lib/api.ts.
+
+CTA wired on Home and Projects empty state.
+
+Notes in PR summary: what changed + how to revert.
