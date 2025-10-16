@@ -893,6 +893,118 @@ app.patch('/api/projects/:projectId', async (req, res) => {
   }
 });
 
+// --- Demo Project: CREATE OR FETCH ---
+// POST /api/demo-project - Creates or returns existing demo project for user
+app.post('/api/demo-project', async (req, res) => {
+  try {
+    const { user_id } = req.body || {};
+    
+    if (!user_id) {
+      return res.status(400).json({ ok: false, error: 'user_id_required' });
+    }
+    
+    console.log('[POST /api/demo-project] user_id=', user_id);
+    
+    // Check if demo project already exists for this user
+    const { data: existing, error: checkErr } = await supabase
+      .from('projects')
+      .select('id, name, status, input_image_url, preview_url')
+      .eq('user_id', user_id)
+      .eq('is_demo', true)
+      .limit(1)
+      .maybeSingle();
+    
+    if (checkErr) {
+      console.error('[demo-project] Check error:', checkErr.message);
+      return res.status(500).json({ ok: false, error: 'database_error' });
+    }
+    
+    // If demo exists, return it
+    if (existing?.id) {
+      console.log('[demo-project] Returning existing demo:', existing.id);
+      return res.json({ ok: true, item: existing, existed: true });
+    }
+    
+    // Upsert profile to avoid foreign key errors
+    await supabase
+      .from('profiles')
+      .upsert(
+        { user_id, plan_tier: 'free' },
+        { onConflict: 'user_id', ignoreDuplicates: true }
+      );
+    
+    // Define demo project data
+    const demoPlanJson = {
+      summary: {
+        title: 'Modern Floating Shelves',
+        est_time: '3-4 hours',
+        est_cost: '$85',
+        overview: 'Build clean, minimalist shelves with concealed brackets.',
+        difficulty: 'intermediate'
+      },
+      materials: [
+        { name: `Birch plywood 3/4" (4x8)`, qty: 1, unit: 'sheet', cost: '$68', subtotal: 68 },
+        { name: 'Edge banding 3/4"', qty: 1, unit: 'ea', cost: '$7.50', subtotal: 7.5 },
+        { name: 'Wood screws 2.5"', qty: 1, unit: 'box', cost: '$9.50', subtotal: 9.5 }
+      ],
+      tools: [
+        { name: 'Circular saw', optional: false },
+        { name: 'Drill', optional: false },
+        { name: 'Level', optional: false },
+        { name: 'Miter saw', optional: true }
+      ],
+      cuts: [
+        { board: 'Birch plywood', dims: '48" x 10"', qty: 2 },
+        { board: 'Birch plywood', dims: '12" x 10"', qty: 4 }
+      ],
+      steps: [
+        { order: 1, title: 'Cut shelves', detail: 'Cut plywood to size using circular saw', duration: 45 },
+        { order: 2, title: 'Apply edge banding', detail: 'Iron on edge banding to all exposed edges', duration: 30 },
+        { order: 3, title: 'Locate studs', detail: 'Use stud finder to mark wall studs', duration: 15 },
+        { order: 4, title: 'Install brackets', detail: 'Mount floating shelf brackets to studs', duration: 60 },
+        { order: 5, title: 'Attach shelves', detail: 'Slide shelves onto brackets and secure', duration: 30 }
+      ],
+      safety: [
+        'Wear safety glasses when cutting',
+        'Use dust mask for sanding',
+        'Ensure proper wall anchoring for load capacity'
+      ],
+      tips: [
+        'Pre-drill screw holes to prevent splitting',
+        'Use a level to ensure shelves are perfectly horizontal'
+      ]
+    };
+    
+    // Create demo project with sample data
+    const { data: created, error: insertErr } = await supabase
+      .from('projects')
+      .insert({
+        user_id,
+        name: 'Modern Floating Shelves (Demo)',
+        budget: 'under-100',
+        skill_level: 'intermediate',
+        status: 'plan_ready',
+        is_demo: true,
+        input_image_url: 'https://images.unsplash.com/photo-1582582429416-456273091821?q=80&w=1200&auto=format&fit=crop',
+        preview_url: 'https://images.unsplash.com/photo-1549187774-b4e9b0445b41?q=80&w=1200&auto=format&fit=crop',
+        plan_json: demoPlanJson
+      })
+      .select('id, name, status, input_image_url, preview_url')
+      .maybeSingle();
+    
+    if (insertErr || !created?.id) {
+      console.error('[demo-project] Insert error:', insertErr?.message || 'no_id');
+      return res.status(500).json({ ok: false, error: 'insert_failed' });
+    }
+    
+    console.log('[demo-project] Created new demo:', created.id);
+    return res.json({ ok: true, item: created, existed: false });
+  } catch (e) {
+    console.error('[demo-project] Exception:', e.message);
+    return res.status(500).json({ ok: false, error: 'server_error' });
+  }
+});
+
 // POST /api/projects/:id/image  (accepts multipart file/image OR direct_url)
 app.post('/api/projects/:id/image', upload.any(), async (req, res) => {
   try {
