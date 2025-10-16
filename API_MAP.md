@@ -321,10 +321,9 @@ curl -X POST https://your-api.com/api/projects \
   - `item`: Project object with `id`, `name`, `status`, `input_image_url`, `preview_url`
   - `existed`: `true` if demo already existed, `false` if newly created
 - **Response (errors):**
-  - `400 { ok: false, error: "user_id_required" }` - Missing user_id
-  - `500 { ok: false, error: "database_error" }` - Database query failed
-  - `500 { ok: false, error: "insert_failed" }` - Failed to create demo project
-  - `500 { ok: false, error: "server_error" }` - Unexpected error
+  - `400 { ok: false, error: "missing_user_id" }` - Missing or empty user_id
+  - `500 { ok: false, error: "insert_failed", details: "..." }` - Failed to create demo (includes error details)
+  - `500 { ok: false, error: "exception", details: "..." }` - Unexpected error (includes error message)
 - **Side effects:** 
   - Checks for existing demo project (`is_demo=true`)
   - If none exists: upserts `profiles`, inserts demo project with full `plan_json`

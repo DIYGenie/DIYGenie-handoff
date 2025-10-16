@@ -897,15 +897,15 @@ app.patch('/api/projects/:projectId', async (req, res) => {
 // POST /api/demo-project - Creates or returns existing demo project for user
 app.post('/api/demo-project', async (req, res) => {
   try {
-    const { user_id } = req.body || {};
+    const user_id = (req.body?.user_id || '').trim();
     
     if (!user_id) {
-      return res.status(400).json({ ok: false, error: 'user_id_required' });
+      return res.status(400).json({ ok: false, error: 'missing_user_id' });
     }
     
     console.log('[POST /api/demo-project] user_id=', user_id);
     
-    // Check if demo project already exists for this user
+    // 1) Check if demo project already exists for this user
     const { data: existing, error: checkErr } = await supabase
       .from('projects')
       .select('id, name, status, input_image_url, preview_url')
@@ -915,8 +915,12 @@ app.post('/api/demo-project', async (req, res) => {
       .maybeSingle();
     
     if (checkErr) {
-      console.error('[demo-project] Check error:', checkErr.message);
-      return res.status(500).json({ ok: false, error: 'database_error' });
+      console.error('[demo-project] select existing error', {
+        message: checkErr.message,
+        details: checkErr.details,
+        hint: checkErr.hint,
+        code: checkErr.code
+      });
     }
     
     // If demo exists, return it
@@ -925,7 +929,7 @@ app.post('/api/demo-project', async (req, res) => {
       return res.json({ ok: true, item: existing, existed: true });
     }
     
-    // Upsert profile to avoid foreign key errors
+    // 2) Upsert profile to avoid foreign key errors
     await supabase
       .from('profiles')
       .upsert(
@@ -933,7 +937,7 @@ app.post('/api/demo-project', async (req, res) => {
         { onConflict: 'user_id', ignoreDuplicates: true }
       );
     
-    // Define demo project data
+    // 3) Define demo project data
     const demoPlanJson = {
       summary: {
         title: 'Modern Floating Shelves',
@@ -975,33 +979,56 @@ app.post('/api/demo-project', async (req, res) => {
       ]
     };
     
-    // Create demo project with sample data
+    // 4) Create demo project with all required fields
+    const demoProject = {
+      user_id,
+      name: 'Modern Floating Shelves (Demo)',
+      budget: '$$',                    // Valid budget value: $, $$, or $$$
+      status: 'plan_ready',
+      is_demo: true,
+      input_image_url: 'https://images.unsplash.com/photo-1582582429416-456273091821?q=80&w=1200&auto=format&fit=crop',
+      preview_url: 'https://images.unsplash.com/photo-1549187774-b4e9b0445b41?q=80&w=1200&auto=format&fit=crop',
+      plan_json: demoPlanJson
+    };
+    
     const { data: created, error: insertErr } = await supabase
       .from('projects')
-      .insert({
-        user_id,
-        name: 'Modern Floating Shelves (Demo)',
-        budget: 'under-100',
-        skill_level: 'intermediate',
-        status: 'plan_ready',
-        is_demo: true,
-        input_image_url: 'https://images.unsplash.com/photo-1582582429416-456273091821?q=80&w=1200&auto=format&fit=crop',
-        preview_url: 'https://images.unsplash.com/photo-1549187774-b4e9b0445b41?q=80&w=1200&auto=format&fit=crop',
-        plan_json: demoPlanJson
-      })
+      .insert(demoProject)
       .select('id, name, status, input_image_url, preview_url')
-      .maybeSingle();
+      .single();
     
-    if (insertErr || !created?.id) {
-      console.error('[demo-project] Insert error:', insertErr?.message || 'no_id');
-      return res.status(500).json({ ok: false, error: 'insert_failed' });
+    if (insertErr) {
+      // Log full error details for diagnosis
+      console.error('[demo-project] Insert error:', {
+        message: insertErr.message,
+        details: insertErr.details,
+        hint: insertErr.hint,
+        code: insertErr.code
+      });
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'insert_failed', 
+        details: insertErr.message 
+      });
+    }
+    
+    if (!created?.id) {
+      console.error('[demo-project] No ID returned after insert');
+      return res.status(500).json({ ok: false, error: 'insert_failed', details: 'no_id_returned' });
     }
     
     console.log('[demo-project] Created new demo:', created.id);
     return res.json({ ok: true, item: created, existed: false });
   } catch (e) {
-    console.error('[demo-project] Exception:', e.message);
-    return res.status(500).json({ ok: false, error: 'server_error' });
+    console.error('[demo-project] Exception:', {
+      message: e?.message,
+      stack: e?.stack
+    });
+    return res.status(500).json({ 
+      ok: false, 
+      error: 'exception', 
+      details: e?.message 
+    });
   }
 });
 

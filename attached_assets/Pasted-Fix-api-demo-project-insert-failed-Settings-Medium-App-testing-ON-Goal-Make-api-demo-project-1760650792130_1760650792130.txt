@@ -1,0 +1,98 @@
+Fix /api/demo-project insert_failed
+
+Settings: Medium • App testing ON
+
+Goal: Make /api/demo-project robust: reuse existing demo, upsert with all required fields, and surface DB error details.
+
+Instructions:
+
+Open the file that implements POST /api/demo-project (e.g. routes/demo-project.ts or similar). Replace its handler body with this:
+
+import type { Request, Response } from 'express';
+import { supabaseAdmin } from '../lib/supabaseAdmin'; // MUST be service-role client
+
+export async function postDemoProject(req: Request, res: Response) {
+  try {
+    const userId: string | undefined = (req.body?.user_id || '').trim() || undefined;
+    if (!userId) {
+      return res.status(400).json({ ok: false, error: 'missing_user_id' });
+    }
+
+    // 1) Reuse existing demo if present
+    {
+      const { data: existing, error: exErr } = await supabaseAdmin
+        .from('projects')
+        .select('id, is_demo')
+        .eq('user_id', userId)
+        .eq('is_demo', true)
+        .limit(1)
+        .maybeSingle();
+
+      if (exErr) {
+        console.error('[demo-project] select existing error', exErr);
+      }
+      if (existing?.id) {
+        return res.json({ ok: true, item: { id: existing.id } });
+      }
+    }
+
+    // 2) Insert minimal, valid demo row (fill every NOT NULL)
+    const now = new Date().toISOString();
+
+    const demo = {
+      user_id: userId,
+      is_demo: true,
+      name: 'Modern Floating Shelves',
+      status: 'plan_ready',            // <- ensure this is a valid enum/value
+      created_at: now,                 // only if NOT NULL in your schema; else remove
+      updated_at: now,                 // only if NOT NULL in your schema; else remove
+      // Safe, optional defaults — tweak to match your schema:
+      description: 'Ready-to-view sample project with a complete build plan.',
+      preview_url: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=1200&auto=format&fit=crop',
+      before_url: 'https://images.unsplash.com/photo-1560185007-b5a2a55e8a0b?q=80&w=1200&auto=format&fit=crop',
+      after_url:  'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?q=80&w=1200&auto=format&fit=crop',
+      // If you have JSON columns that are NOT NULL, provide {} or []:
+      plan_json: null,                 // or {} if NOT NULL
+      materials_json: null,            // or [] if NOT NULL
+      tools_json: null,                // or [] if NOT NULL
+      cut_list_json: null,             // or [] if NOT NULL
+      steps_json: null,                // or [] if NOT NULL
+    };
+
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from('projects')
+      .insert(demo)
+      .select('id')
+      .single();
+
+    if (insErr) {
+      // log full error to diagnose
+      console.error('[demo-project] insert error', {
+        message: insErr.message,
+        details: insErr.details,
+        hint: insErr.hint,
+        code: (insErr as any).code,
+      });
+      return res.status(500).json({ ok: false, error: 'insert_failed', details: insErr.message });
+    }
+
+    return res.json({ ok: true, item: inserted });
+  } catch (e: any) {
+    console.error('[demo-project] exception', e);
+    return res.status(500).json({ ok: false, error: 'exception', details: e?.message });
+  }
+}
+
+
+Ensure this handler is actually wired in your router:
+
+app.post('/api/demo-project', postDemoProject);
+
+
+Confirm we’re using the service-role client:
+
+lib/supabaseAdmin.ts (or equivalent) must initialize with SUPABASE_SERVICE_KEY.
+
+RLS can stay ON; the service key bypasses it.
+
+Rebuild / Publish the Webhooks app.
