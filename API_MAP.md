@@ -457,22 +457,90 @@ curl -X POST https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440
 ---
 
 ### GET /api/projects/:id/plan
-- **Handler file:** `index.js:1114`
+- **Handler file:** `index.js:1242`
 - **Auth:** none
 - **Request headers:** -
 - **Query params:** -
 - **Path params:** `id` (project UUID)
 - **Request body:** -
-- **Response (success):** `200 { ok: true, plan_text: "markdown-formatted-plan", status: "project_status" }`
+- **Response (success):** `200` - Returns comprehensive plan data with the following frozen schema:
+```json
+{
+  "projectId": "string",
+  "summary": {
+    "title": "string",
+    "heroImageUrl": "string|null",
+    "estTimeHours": 0,
+    "estCostUsd": 0
+  },
+  "preview": {
+    "beforeUrl": "string|null",
+    "afterUrl": "string|null"
+  },
+  "materials": [
+    {
+      "name": "string",
+      "qty": 0,
+      "unit": "string",
+      "subtotalUsd": 0
+    }
+  ],
+  "tools": {
+    "required": ["string"],
+    "optional": ["string"]
+  },
+  "cutList": {
+    "items": [
+      {
+        "board": "string",
+        "dims": "string",
+        "qty": 0
+      }
+    ],
+    "layoutSvgUrl": "string|null"
+  },
+  "steps": [
+    {
+      "n": 1,
+      "title": "string",
+      "text": "string",
+      "diagramUrl": "string|null"
+    }
+  ],
+  "safety": {
+    "notes": ["string"]
+  },
+  "permits": {
+    "needed": false,
+    "note": "string"
+  },
+  "quota": {
+    "tier": "free|casual|pro",
+    "plansUsed": 0,
+    "plansLimit": 0
+  }
+}
+```
 - **Response (errors):**
   - `404 { ok: false, error: "project_not_found" }` - Project doesn't exist
   - `500 { ok: false, error: "error_message" }` - Server error
-- **Side effects:** Reads from `projects` table, formats `plan_json` to markdown
-- **Logs/phrases:** `[ERROR] GET plan database error`, `[ERROR] GET plan exception`
+- **Side effects:** Reads from `projects` and `profiles` tables, assembles plan data with defaults for missing fields
+- **Logs/phrases:** `[ERROR] GET plan database error`, `[ERROR] GET plan exception`, `[WARN] Could not fetch quota`
+- **Performance:** Response kept under 1.5 MB, no inline USDZ/large blobs (uses URLs)
+- **Data sources:** 
+  - Plan data from `projects.plan_json` (JSONB field)
+  - User quota from `profiles` table (subscription_tier, plan_tier)
+  - Image URLs from `projects.input_image_url` and `projects.preview_url`
 
-**Sample:**
+**Sample (existing project):**
 ```bash
-curl https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001/plan
+curl http://localhost:5000/api/projects/b904c604-c12b-4c5d-a6dd-548908913f9f/plan
+```
+
+**Sample (404 - project not found):**
+```bash
+curl http://localhost:5000/api/projects/00000000-0000-0000-0000-000000000999/plan
+# Response: {"ok":false,"error":"project_not_found"}
 ```
 
 ---

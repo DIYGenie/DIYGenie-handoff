@@ -1,0 +1,81 @@
+Goal: Create GET /api/projects/:id/plan returning one JSON object with all data the Plan screen needs. Use existing data if present; otherwise compute/assemble from current pipeline and return placeholders where needed.
+
+Do this:
+
+Locate server entry & router files (e.g., src/index.ts, src/server.ts, src/routes/*.ts).
+
+If names differ, pause and ask me to confirm before creating new files.
+
+Add route:
+
+GET /api/projects/:id/plan
+
+Request params: id (project id, uuid/string).
+
+Auth: same middleware/headers used by other project endpoints.
+
+Response (shape is frozen):
+
+{
+  "projectId": "string",
+  "summary": { "title": "string", "heroImageUrl": "string|null", "estTimeHours": 0, "estCostUsd": 0 },
+  "preview": { "beforeUrl": "string|null", "afterUrl": "string|null" },
+  "materials": [ { "name": "string", "qty": 0, "unit": "string", "subtotalUsd": 0 } ],
+  "tools": { "required": [ "string" ], "optional": [ "string" ] },
+  "cutList": { "items": [ { "board": "string", "dims": "string", "qty": 0 } ], "layoutSvgUrl": "string|null" },
+  "steps": [ { "n": 1, "title": "string", "text": "string", "diagramUrl": "string|null" } ],
+  "safety": { "notes": [ "string" ] },
+  "permits": { "needed": false, "note": "string" },
+  "quota": { "tier": "free|casual|pro", "plansUsed": 0, "plansLimit": 0 }
+}
+
+
+Rules:
+
+Pull any existing plan/preview data for the project; do not change schema/table names yet.
+
+If fields are missing, return sensible defaults (e.g., empty arrays, null URLs, needed:false).
+
+Units: keep costs in USD, lengths in meters in any computed text.
+
+Performance: keep response <1.5 MB. Do not inline USDZ/large blobs—use URLs.
+
+Validation & types:
+
+Add a lightweight validator (Zod/Yup or existing util) that enforces the schema above.
+
+Create TypeScript types/interfaces for the response and export for reuse.
+
+Errors:
+
+404 if project not found.
+
+402/403 if quota blocks plan generation (mirror current gating behavior).
+
+Always return { ok:false, error:"message" } body on non-2xx.
+
+Tests / checks:
+
+Add a simple handler test (happy path + 404).
+
+Provide two sample curls in the PR description:
+
+curl GET /api/projects/<sampleId>/plan (existing project)
+
+curl GET /api/projects/<missingId>/plan (404)
+
+Docs:
+
+Update /docs/api.md (or create if missing) with the endpoint, params, and response fields exactly as above.
+
+Deliverables:
+
+New route live in dev server.
+
+Types + validator committed.
+
+Brief PR description with curls and any assumptions.
+
+Stop conditions:
+
+If you can’t find the server entry/router file names, ask me to confirm exact file paths before creating anything new.

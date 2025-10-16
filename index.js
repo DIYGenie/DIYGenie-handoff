@@ -1229,77 +1229,158 @@ app.post('/api/projects/:id/suggestions-smart', async (req, res) => {
   }
 });
 
-// --- GET /api/projects/:id/plan ---
+/**
+ * GET /api/projects/:id/plan
+ * Returns comprehensive plan data for the Plan screen
+ * 
+ * @param {string} id - Project UUID
+ * @returns {object} Plan data with summary, preview, materials, tools, steps, etc.
+ */
 app.get('/api/projects/:id/plan', async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // Fetch project with all needed fields
     const { data: project, error } = await supabase
       .from('projects')
-      .select('id, status, plan_json, name')
+      .select('id, user_id, status, plan_json, name, input_image_url, preview_url')
       .eq('id', id)
       .maybeSingle();
     
     if (error) {
       console.log('[ERROR] GET plan database error:', error.message);
-      return res.status(500).json({ ok:false, error: error.message });
+      return res.status(500).json({ ok: false, error: error.message });
     }
+    
     if (!project) {
-      return res.status(404).json({ ok:false, error:'project_not_found' });
+      return res.status(404).json({ ok: false, error: 'project_not_found' });
     }
 
-    // Generate plan_text from plan_json (allow access even if not plan_ready)
-    const plan_json = project.plan_json || {};
-    const summary = plan_json.summary || {};
-    const steps = plan_json.steps || [];
-    const tools = plan_json.tools || [];
-    const materials = plan_json.materials || [];
-    const safety = plan_json.safety || [];
-    const tips = plan_json.tips || [];
-
-    let plan_text = `## ${summary.title || project.name || 'DIY Plan'} (stub)\n\n`;
-    plan_text += `**Difficulty:** ${summary.difficulty || 'beginner'}  \n`;
-    plan_text += `**Estimated Cost:** ${summary.est_cost || '$$'}  \n`;
-    plan_text += `**Estimated Time:** ${summary.est_time || '2-4 hours'}  \n\n`;
-    
-    plan_text += `### Steps\n`;
-    steps.forEach((step, idx) => {
-      plan_text += `${idx + 1}. **${step.title}** - ${step.detail} (${step.duration_minutes || 30} min)\n`;
-    });
-    
-    if (tools.length > 0) {
-      plan_text += `\n### Tools Needed\n`;
-      tools.forEach(tool => {
-        plan_text += `- ${tool}\n`;
-      });
-    }
-    
-    if (materials.length > 0) {
-      plan_text += `\n### Materials\n`;
-      materials.forEach(mat => {
-        const matName = typeof mat === 'string' ? mat : mat.name;
-        const qty = mat.qty ? ` (${mat.qty} ${mat.unit || ''})` : '';
-        plan_text += `- ${matName}${qty}\n`;
-      });
-    }
-    
-    if (safety.length > 0) {
-      plan_text += `\n### Safety Tips\n`;
-      safety.forEach(tip => {
-        plan_text += `- ${tip}\n`;
-      });
-    }
-    
-    if (tips.length > 0) {
-      plan_text += `\n### Pro Tips\n`;
-      tips.forEach(tip => {
-        plan_text += `- ${tip}\n`;
-      });
+    // Get user quota/entitlements
+    let quota = { tier: 'free', plansUsed: 0, plansLimit: 2 };
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('subscription_tier, plan_tier')
+        .eq('user_id', project.user_id)
+        .maybeSingle();
+      
+      const tier = profile?.subscription_tier || profile?.plan_tier || 'free';
+      const limit = tier === 'pro' ? 25 : tier === 'casual' ? 5 : 2;
+      
+      const { count } = await supabase
+        .from('projects')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', project.user_id);
+      
+      quota = {
+        tier,
+        plansUsed: count || 0,
+        plansLimit: limit
+      };
+    } catch (e) {
+      console.warn('[WARN] Could not fetch quota:', e.message);
     }
 
-    return res.json({ ok:true, plan_text, status: project.status });
+    // Extract plan_json data with defaults
+    const plan = project.plan_json || {};
+    const planSummary = plan.overview || plan.summary || {};
+    const planSteps = plan.steps || [];
+    const planMaterials = plan.materials || [];
+    const planTools = plan.tools || [];
+    const planCuts = plan.cuts || [];
+    const planSafety = plan.safety || [];
+    
+    // Parse estimated time (convert to hours)
+    let estTimeHours = 0;
+    const estTimeStr = planSummary.est_time || planSummary.estimatedTime || '';
+    const hourMatch = estTimeStr.match(/(\d+)\s*h/i);
+    if (hourMatch) {
+      estTimeHours = parseInt(hourMatch[1], 10);
+    } else if (estTimeStr.includes('-')) {
+      const [min, max] = estTimeStr.split('-').map(s => parseInt(s, 10));
+      estTimeHours = Math.ceil((min + max) / 2);
+    }
+    
+    // Parse estimated cost (convert to USD)
+    let estCostUsd = 0;
+    const estCostStr = planSummary.est_cost || planSummary.estimatedCost || '';
+    if (estCostStr.includes('$')) {
+      const costMatch = estCostStr.match(/\$?\s*(\d+)/);
+      if (costMatch) estCostUsd = parseInt(costMatch[1], 10);
+    }
+
+    // Build response following the frozen schema
+    const response = {
+      projectId: project.id,
+      
+      summary: {
+        title: planSummary.title || project.name || 'DIY Project Plan',
+        heroImageUrl: project.preview_url || project.input_image_url || null,
+        estTimeHours,
+        estCostUsd
+      },
+      
+      preview: {
+        beforeUrl: project.input_image_url || null,
+        afterUrl: project.preview_url || null
+      },
+      
+      materials: planMaterials.map(mat => {
+        if (typeof mat === 'string') {
+          return { name: mat, qty: 0, unit: 'ea', subtotalUsd: 0 };
+        }
+        return {
+          name: mat.name || 'Material',
+          qty: parseFloat(mat.qty || mat.quantity || 0),
+          unit: mat.unit || 'ea',
+          subtotalUsd: parseFloat(mat.subtotal || mat.unit_price || mat.price || 0)
+        };
+      }),
+      
+      tools: {
+        required: Array.isArray(planTools) 
+          ? planTools.filter(t => typeof t === 'string' || !t.optional).map(t => typeof t === 'string' ? t : t.name)
+          : [],
+        optional: Array.isArray(planTools)
+          ? planTools.filter(t => typeof t === 'object' && t.optional).map(t => t.name)
+          : []
+      },
+      
+      cutList: {
+        items: planCuts.map(cut => ({
+          board: cut.item || cut.board || 'Board',
+          dims: cut.size || cut.dims || cut.dimensions || '',
+          qty: parseInt(cut.qty || cut.quantity || 1, 10)
+        })),
+        layoutSvgUrl: null  // No layout diagrams yet
+      },
+      
+      steps: planSteps.map((step, idx) => ({
+        n: parseInt(step.order || step.step || idx + 1, 10),
+        title: step.title || `Step ${idx + 1}`,
+        text: step.text || step.detail || step.description || '',
+        diagramUrl: step.diagramUrl || null
+      })),
+      
+      safety: {
+        notes: Array.isArray(planSafety) 
+          ? planSafety.map(s => typeof s === 'string' ? s : s.note || s.text || '')
+          : []
+      },
+      
+      permits: {
+        needed: false,  // Default to no permits needed
+        note: 'Check local building codes for structural modifications'
+      },
+      
+      quota
+    };
+
+    return res.json(response);
   } catch (e) {
     console.log('[ERROR] GET plan exception:', e.message);
-    return res.status(500).json({ ok:false, error: String(e.message || e) });
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
