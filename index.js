@@ -2137,6 +2137,7 @@ app.delete('/api/projects/:id', async (req, res) => {
     if (isDryRun) {
       return res.json({
         ok: true,
+        dry: true,
         wouldRemove: {
           uploads: uploadsFiles,
           roomScans: roomScansFiles,

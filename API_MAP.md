@@ -929,7 +929,7 @@ curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440
 - **Path params:** `id` (project UUID)
 - **Request body:** -
 - **Response (success - normal delete):** `200 { ok: true }`
-- **Response (success - dry-run):** `200 { ok: true, wouldRemove: { uploads: [...], roomScans: [...], rows: { previews: N, room_scans: M, projects: 1 } } }`
+- **Response (success - dry-run):** `200 { ok: true, dry: true, wouldRemove: { uploads: [...], roomScans: [...], rows: { previews: N, room_scans: M, projects: 1 } } }`
 - **Response (errors):** `500 { ok: false, error: "error_message" }`
 - **Side effects:** 
   - **Storage cleanup:** Lists and deletes files from two buckets:
@@ -959,9 +959,10 @@ curl -X DELETE "https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655
 ```json
 {
   "ok": true,
+  "dry": true,
   "wouldRemove": {
     "uploads": ["projects/550e8400-.../image1.jpg", "projects/550e8400-.../image2.jpg"],
-    "roomScans": ["room-scans/user123/scan1.jpg"],
+    "roomScans": ["user123/scan1.jpg"],
     "rows": {
       "previews": 2,
       "room_scans": 1,
