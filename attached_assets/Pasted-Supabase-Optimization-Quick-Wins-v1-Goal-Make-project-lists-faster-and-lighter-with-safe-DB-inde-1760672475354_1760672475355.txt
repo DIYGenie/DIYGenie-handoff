@@ -1,0 +1,104 @@
+Supabase Optimization – Quick Wins v1”
+
+Goal
+Make project lists faster and lighter with safe DB indexes, smaller API payloads, and zero-cost thumbnailing (via Supabase Image Transformations). No breaking changes to current UX.
+
+Tasks
+
+DB Indexes & updated_at trigger
+
+Create SQL migration migrations/20251017_perf_projects.sql that:
+
+Adds indexes if missing:
+
+create index if not exists idx_projects_user_updated
+  on public.projects (user_id, updated_at desc);
+
+create index if not exists idx_projects_status_user
+  on public.projects (status, user_id);
+
+
+Ensures updated_at auto-refreshes:
+
+create or replace function set_updated_at()
+returns trigger language plpgsql as $$
+begin new.updated_at = now(); return new; end $$;
+
+drop trigger if exists trg_projects_updated_at on public.projects;
+create trigger trg_projects_updated_at
+  before update on public.projects
+  for each row execute function set_updated_at();
+
+
+API: lightweight list response
+
+In the Express API, add a list route variant that returns card-size fields only to cut payload size:
+
+File: index.js
+
+Endpoint: GET /api/projects/cards?user_id=:id&limit=10&offset=0
+
+Fields returned per project: { id, name, status, preview_url, updated_at }
+
+Order: updated_at desc
+
+Use existing Supabase client; select only those columns.
+
+Keep existing /api/projects unchanged.
+
+Zero-cost thumbnails (no Sharp, no jobs)
+
+Add a small util that builds a transformed CDN URL for any public preview_url:
+
+File: lib/image.ts (or .js)
+
+Export thumb(url, w=640, q=70) that appends Supabase transform query string:
+
+If the URL is already a public Storage URL (contains /object/public/), append:
+?width=${w}&quality=${q}&resize=contain
+
+Otherwise, return the original URL (safe fallback).
+
+In the projects cards endpoint, add preview_thumb_url using that util when preview_url exists.
+
+React Native consumer (small, safe tweak)
+
+In HomeScreen.tsx and ProjectsScreen.tsx (where project cards or recent projects are fetched):
+
+If we’re already calling a projects list endpoint, do not change behavior.
+
+If it’s easy/centralized to switch: use the new /api/projects/cards endpoint and render preview_thumb_url where available for images (hero/recent projects/card lists).
+
+Keep all existing UI intact.
+
+Housekeeping
+
+Add a short doc: docs/PERF_NOTES.md summarizing:
+
+new indexes
+
+new endpoint
+
+how the image transformation param works
+
+rollback (drop indexes / remove endpoint)
+
+Acceptance Criteria / Tests
+
+SQL migration runs cleanly from Supabase SQL editor or migration runner (idempotent).
+
+GET /api/projects/cards?user_id=<YOUR_UUID> responds 200 with ≤ 2KB per 10 items and fields only: id, name, status, preview_url, preview_thumb_url, updated_at.
+
+Card payloads are smaller than the full /api/projects response.
+
+If preview_url is a public storage URL, preview_thumb_url includes ?width=640&quality=70&resize=contain and loads in app.
+
+App still renders exactly as before (no layout shifts). If switched to the new endpoint, lists feel at least as snappy.
+
+No changes to authentication/RLS.
+
+Notes
+
+We’re not generating files; Supabase’s CDN does on-the-fly transforms.
+
+No breaking changes; we can adopt the cards endpoint incrementally.
