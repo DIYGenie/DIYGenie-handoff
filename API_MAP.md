@@ -922,20 +922,65 @@ curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440
 ---
 
 ### DELETE /api/projects/:id
-- **Handler file:** `index.js:1545`
+- **Handler file:** `index.js:2055`
 - **Auth:** none
 - **Request headers:** -
-- **Query params:** -
+- **Query params:** `dry` (optional, set to "1" for dry-run mode)
 - **Path params:** `id` (project UUID)
 - **Request body:** -
-- **Response (success):** `200 { ok: true }`
+- **Response (success - normal delete):** `200 { ok: true }`
+- **Response (success - dry-run):** `200 { ok: true, wouldRemove: { uploads: [...], roomScans: [...], rows: { previews: N, room_scans: M, projects: 1 } } }`
 - **Response (errors):** `500 { ok: false, error: "error_message" }`
-- **Side effects:** Deletes from `projects` table
-- **Logs/phrases:** -
+- **Side effects:** 
+  - **Storage cleanup:** Lists and deletes files from two buckets:
+    - `uploads`: All files under `projects/:id/` prefix
+    - `room-scans`: Only files linked to `room_scans` rows for this project (extracts paths from `image_url` field)
+  - **Database cleanup:** Deletes rows in order:
+    1. `previews` table (by `project_id`)
+    2. `room_scans` table (by `project_id`)
+    3. `projects` table (by `id`)
+  - **Idempotent:** Missing data treated as success (no errors if already deleted)
+  - **Chunked deletion:** Storage files deleted in chunks of ≤100
+- **Logs/phrases:** 
+  - `[delete] <project_id> filesRemoved=<n> rows={previews:<n>,room_scans:<n>,projects:<n>}` - Success summary
+  - `[delete] error` - Unexpected error
+- **Special notes:**
+  - Dry-run mode (`?dry=1`) returns what would be deleted without actually deleting
+  - Uses Supabase Admin client (service role key) to bypass RLS
+  - Never deletes room-scans files not linked to this project
+  - Safe for production use (idempotent, comprehensive cleanup)
 
-**Sample:**
+**Sample (dry-run):**
+```bash
+curl -X DELETE "https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001?dry=1"
+```
+
+**Sample Response (dry-run):**
+```json
+{
+  "ok": true,
+  "wouldRemove": {
+    "uploads": ["projects/550e8400-.../image1.jpg", "projects/550e8400-.../image2.jpg"],
+    "roomScans": ["room-scans/user123/scan1.jpg"],
+    "rows": {
+      "previews": 2,
+      "room_scans": 1,
+      "projects": 1
+    }
+  }
+}
+```
+
+**Sample (real delete):**
 ```bash
 curl -X DELETE https://your-api.com/api/projects/550e8400-e29b-41d4-a716-446655440001
+```
+
+**Sample Response (real delete):**
+```json
+{
+  "ok": true
+}
 ```
 
 ---
