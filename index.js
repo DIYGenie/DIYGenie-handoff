@@ -8,6 +8,7 @@ import planRouter from './routes/plan.js';
 import entitlementsRouter from './routes/entitlements.js';
 import healthRouter, { healthGet, liveGet, readyGet, fullGet, healthHead } from './routes/health.js';
 import versionRouter, { versionGet, versionHead } from './routes/version.js';
+import { thumb } from './lib/image.js';
 
 const app = express();
 app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
@@ -753,6 +754,33 @@ app.get('/api/projects', async (req, res) => {
     res.json({ ok: true, items: data || [] });
   } catch (e) {
     res.status(500).json({ ok:false, error: String(e.message || e) });
+  }
+});
+
+// --- Projects: CARDS (Lightweight List) ---
+app.get('/api/projects/cards', async (req, res) => {
+  try {
+    const user_id = req.query.user_id || DEV_USER;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = parseInt(req.query.offset) || 0;
+
+    const { data, error } = await supabase
+      .from('projects')
+      .select('id,name,status,preview_url,updated_at')
+      .eq('user_id', user_id)
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) throw error;
+
+    const items = (data || []).map(project => ({
+      ...project,
+      preview_thumb_url: thumb(project.preview_url, 640, 70)
+    }));
+
+    res.json({ ok: true, items });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
