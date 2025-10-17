@@ -12,7 +12,7 @@ import { thumb } from './lib/image.js';
 
 const app = express();
 app.use(cors({ origin: (o, cb)=>cb(null,true), methods: ['GET','POST','PATCH','OPTIONS'] }));
-app.use(express.json());
+app.use(express.json({ limit: '10kb' }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -1062,6 +1062,44 @@ app.post('/api/demo-project', async (req, res) => {
       error: 'exception', 
       details: e?.message 
     });
+  }
+});
+
+// --- Events: CREATE ---
+app.post('/api/events', async (req, res) => {
+  try {
+    const { user_id, project_id, event_type, props } = req.body || {};
+
+    // Validate user_id (must be UUID)
+    if (!user_id || typeof user_id !== 'string' || user_id.trim().length === 0) {
+      return res.status(400).json({ ok: false, error: 'missing_user_id' });
+    }
+
+    // Validate event_type (must be non-empty string)
+    if (!event_type || typeof event_type !== 'string' || event_type.trim().length === 0) {
+      return res.status(400).json({ ok: false, error: 'missing_event_type' });
+    }
+
+    // Insert into events table
+    const { error: insertErr } = await supabase
+      .from('events')
+      .insert({
+        user_id,
+        project_id: project_id || null,
+        event_type: event_type.trim(),
+        props: props || {}
+      });
+
+    if (insertErr) {
+      console.error('[events] insert fail', insertErr?.message);
+      return res.status(500).json({ ok: false, error: 'insert_failed' });
+    }
+
+    console.log('[events] insert ok', user_id, event_type);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('[events] insert fail', e?.message);
+    return res.status(500).json({ ok: false, error: 'server_error' });
   }
 });
 

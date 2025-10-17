@@ -426,6 +426,50 @@ curl -X POST http://localhost:5000/api/demo-project \
 
 ---
 
+### POST /api/events
+- **Handler file:** `index.js:1072`
+- **Auth:** none (requires user_id in body)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "user_id": "uuid-string-required",
+  "event_type": "non-empty-string-required",
+  "project_id": "uuid-or-null-optional",
+  "props": { "key": "value" }
+}
+```
+- **Response (success):** `200 { ok: true }`
+- **Response (errors):**
+  - `400 { ok: false, error: "missing_user_id" }` - user_id is missing or empty
+  - `400 { ok: false, error: "missing_event_type" }` - event_type is missing or empty
+  - `413 PayloadTooLargeError` - Request body exceeds 10KB limit
+  - `500 { ok: false, error: "insert_failed" }` - Database insert failed
+  - `500 { ok: false, error: "server_error" }` - Unexpected error
+- **Side effects:** Inserts telemetry event into `public.events` table
+- **Logs/phrases:**
+  - `[events] insert ok <user_id> <event_type>` - Success
+  - `[events] insert fail <error_message>` - Failure
+- **Note:** Request body limited to 10KB. Requires `public.events` table in database.
+
+**Sample:**
+```bash
+curl -X POST http://localhost:5000/api/events \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"99198c4b-8470-49e2-895c-75593c5aa181","event_type":"open_plan","project_id":null,"props":{"source":"test"}}'
+```
+
+**Response:**
+```json
+{
+  "ok": true
+}
+```
+
+---
+
 ### POST /api/projects/:id/image
 - **Handler file:** `index.js:780`
 - **Auth:** none
