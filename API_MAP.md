@@ -245,6 +245,53 @@ curl 'https://your-api.com/api/projects?user_id=550e8400-e29b-41d4-a716-44665544
 
 ---
 
+### GET /api/projects/cards
+- **Handler file:** `index.js:765`
+- **Auth:** none (user_id via query)
+- **Request headers:** -
+- **Query params:** 
+  - `user_id` (UUID, defaults to DEV_USER)
+  - `limit` (integer, optional, default: 10, max: 50)
+  - `offset` (integer, optional, default: 0)
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true, items: [...cards] }`
+  - Card shape: `{ id, name, status, preview_url, preview_thumb_url, updated_at }`
+  - `preview_thumb_url` - Optimized thumbnail URL with Supabase CDN transformations (640px, quality 70)
+- **Response (errors):** `500 { ok: false, error: "error_message" }`
+- **Side effects:** Reads from `projects` table
+- **Logs/phrases:** -
+- **Performance:** Lightweight endpoint with smaller payloads (6 fields vs 15+), leverages `idx_projects_user_updated` index
+- **Note:** Designed for project cards/lists. Uses pagination. Auto-transforms Supabase Storage URLs to thumbnails.
+
+**Sample:**
+```bash
+# Basic usage
+curl 'https://your-api.com/api/projects/cards?user_id=550e8400-e29b-41d4-a716-446655440001'
+
+# With pagination
+curl 'https://your-api.com/api/projects/cards?user_id=550e8400-e29b-41d4-a716-446655440001&limit=20&offset=0'
+```
+
+**Response Example:**
+```json
+{
+  "ok": true,
+  "items": [
+    {
+      "id": "38401d86-d790-48fa-978a-ba2ae8b095ed",
+      "name": "Build 3 shelves",
+      "status": "planned",
+      "preview_url": "https://example.supabase.co/storage/v1/object/public/uploads/image.jpg",
+      "preview_thumb_url": "https://example.supabase.co/storage/v1/object/public/uploads/image.jpg?width=640&quality=70&resize=contain",
+      "updated_at": "2025-10-17T03:07:24.641069+00:00"
+    }
+  ]
+}
+```
+
+---
+
 ### GET /api/projects/:id
 - **Handler file:** `index.js:711`
 - **Auth:** none

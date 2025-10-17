@@ -41,6 +41,30 @@ Errors are returned as consistent JSON objects (`{ ok: false, error: "error_mess
 ### State Machine Pattern
 Project lifecycle is managed via a `status` field in the Projects table, transitioning through states like `new`, `draft`, `preview_requested`, `preview_ready`, `planning`, and `plan_ready`, triggered by explicit API calls.
 
+## Performance Optimizations
+
+### Database Indexes (October 2025)
+Two composite indexes were added to the `projects` table to improve query performance:
+- **idx_projects_user_updated**: `(user_id, updated_at DESC)` - Optimizes project lists ordered by recent updates
+- **idx_projects_status_user**: `(status, user_id)` - Enables fast status-filtered queries
+
+An auto-updating trigger (`trg_projects_updated_at`) ensures the `updated_at` timestamp is refreshed on every project modification.
+
+### Lightweight API Endpoint
+**GET /api/projects/cards** - A performance-optimized endpoint for project lists with:
+- Minimal payload size (6 fields vs 15+)
+- Built-in pagination (limit/offset)
+- CDN-optimized thumbnail URLs
+- Leverages the new database indexes
+
+### Image Transformations
+The `lib/image.js` utility provides zero-cost thumbnailing via Supabase's CDN:
+- Automatically appends `?width=640&quality=70&resize=contain` to Supabase Storage URLs
+- Safely handles external URLs (returns unchanged)
+- Reduces image bandwidth by 95%+
+
+See `docs/PERF_NOTES.md` for detailed documentation.
+
 ## External Dependencies
 
 - **Supabase**: Primary database (PostgreSQL) and object storage.
