@@ -1,0 +1,71 @@
+Replace storage.delete_files RPC with Storage API in DELETE /api/projects/:id
+
+Do:
+
+In the DELETE handler for /api/projects/:id, remove any call to storage.delete_files / storage.delete_objects.
+
+Use the Supabase Storage API instead:
+
+// helper: list all keys under a prefix
+async function listAllKeys(bucket, prefix) {
+  const keys = [];
+  let page = 0, size = 100;
+  while (true) {
+    const { data, error } = await supabaseAdmin.storage.from(bucket)
+      .list(prefix, { limit: size, offset: page * size });
+    if (error) throw error;
+    if (!data?.length) break;
+    keys.push(...data.map(f => `${prefix}/${f.name}`));
+    if (data.length < size) break;
+    page += 1;
+  }
+  return keys;
+}
+
+// inside handler
+const dry = req.query.dry === '1';
+const uploadPrefix = `projects/${projectId}`;
+
+// list
+const uploadKeys = await listAllKeys('uploads', uploadPrefix);        // full keys
+// for room-scans use DB rows to build exact keys:
+//   SELECT image_url FROM room_scans WHERE project_id = :id
+// then strip the bucket URL prefix to get keys like `${userId}/${file}.jpg`
+const scanKeys = roomScanRows.map(r =>
+  r.image_url.replace(/^.*\/room-scans\//, '')        // keep path after bucket
+);
+
+if (!dry) {
+  // delete in chunks of ≤100
+  const chunk = (arr, n=100) => arr.length ? [arr.slice(0,n), ...chunk(arr.slice(n), n)] : [];
+  for (const group of chunk(uploadKeys)) {
+    await supabaseAdmin.storage.from('uploads').remove(group);
+  }
+  for (const group of chunk(scanKeys)) {
+    await supabaseAdmin.storage.from('room-scans').remove(group);
+  }
+  // then delete DB rows: previews → room_scans → projects
+}
+
+// responses:
+if (dry) {
+  return res.json({
+    ok: true, dry: true,
+    wouldRemove: {
+      uploads: uploadKeys,
+      roomScans: scanKeys,
+      rows: { previews: previewsCount, room_scans: scansCount, projects: 1 }
+    }
+  });
+} else {
+  return res.json({ ok: true });
+}
+
+
+Keep idempotency and logging. Never delete anything when ?dry=1.
+
+Acceptance:
+
+curl -sS -X DELETE "...?dry=1" returns { ok: true, dry: true, wouldRemove: {...} } (no error).
+
+Real delete (no ?dry=1) returns { ok: true }.

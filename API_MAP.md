@@ -946,9 +946,12 @@ curl "https://api.diygenieapp.com/api/projects/550e8400-e29b-41d4-a716-446655440
   - `[delete] error` - Unexpected error
 - **Special notes:**
   - Dry-run mode (`?dry=1`) returns what would be deleted without actually deleting
+  - Uses Supabase Storage API with pagination support (handles >1000 files)
+  - Pagination: Lists files in batches of 100 until all are discovered
   - Uses Supabase Admin client (service role key) to bypass RLS
   - Never deletes room-scans files not linked to this project
   - Safe for production use (idempotent, comprehensive cleanup)
+  - No RPC calls - pure Storage API implementation
 
 **Sample (dry-run):**
 ```bash

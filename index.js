@@ -2048,24 +2048,48 @@ app.get('/api/projects/:projectId/preview/status', async (req, res) => {
   }
 });
 
+// Helper: list all storage keys under a prefix with pagination
+async function listAllKeys(bucket, prefix) {
+  const keys = [];
+  let page = 0;
+  const size = 100;
+  
+  while (true) {
+    const { data, error } = await supabase.storage.from(bucket)
+      .list(prefix, { limit: size, offset: page * size });
+    
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    
+    keys.push(...data.map(f => `${prefix}/${f.name}`));
+    
+    if (data.length < size) break;
+    page += 1;
+  }
+  
+  return keys;
+}
+
+// Helper: chunk array into groups of n
+function chunkArray(arr, n = 100) {
+  const result = [];
+  for (let i = 0; i < arr.length; i += n) {
+    result.push(arr.slice(i, i + n));
+  }
+  return result;
+}
+
 // --- Projects: DELETE (safe deep delete) ---
 app.delete('/api/projects/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const isDryRun = req.query.dry === '1';
 
-    // 1. List storage files in uploads bucket (projects/:id/**)
-    const uploadsBucket = supabase.storage.from(UPLOADS_BUCKET);
-    const uploadsPrefix = `projects/${id}/`;
+    // 1. List storage files in uploads bucket with pagination
+    const uploadsPrefix = `projects/${id}`;
     let uploadsFiles = [];
     try {
-      const { data: uploadsList, error: uploadsErr } = await uploadsBucket.list(uploadsPrefix, {
-        limit: 1000,
-        sortBy: { column: 'name', order: 'asc' }
-      });
-      if (!uploadsErr && uploadsList) {
-        uploadsFiles = uploadsList.map(f => `${uploadsPrefix}${f.name}`);
-      }
+      uploadsFiles = await listAllKeys(UPLOADS_BUCKET, uploadsPrefix);
     } catch (e) {
       // Ignore errors (bucket/prefix might not exist)
     }
@@ -2075,24 +2099,14 @@ app.delete('/api/projects/:id', async (req, res) => {
     try {
       const { data: scans, error: scansErr } = await supabase
         .from('room_scans')
-        .select('id, user_id, image_url')
+        .select('image_url')
         .eq('project_id', id);
       
       if (!scansErr && scans) {
-        for (const scan of scans) {
-          if (scan.image_url && scan.image_url.includes('/object/public/')) {
-            // Extract path after /object/public/
-            const match = scan.image_url.match(/\/object\/public\/(.+)$/);
-            if (match) {
-              let fullPath = match[1];
-              // Strip bucket name prefix if present (e.g., "room-scans/user123/file.jpg" → "user123/file.jpg")
-              if (fullPath.startsWith('room-scans/')) {
-                fullPath = fullPath.substring('room-scans/'.length);
-              }
-              roomScansFiles.push(fullPath);
-            }
-          }
-        }
+        roomScansFiles = scans
+          .filter(s => s.image_url)
+          .map(s => s.image_url.replace(/^.*\/room-scans\//, ''))
+          .filter(Boolean);
       }
     } catch (e) {
       // Ignore errors (table might not exist)
@@ -2150,47 +2164,34 @@ app.delete('/api/projects/:id', async (req, res) => {
       });
     }
 
-    // 5. REAL DELETE: Remove storage files
+    // 5. REAL DELETE: Remove storage files in chunks
     let filesRemoved = 0;
 
-    // Delete uploads files (in chunks of 100)
-    if (uploadsFiles.length > 0) {
-      const uploadChunks = [];
-      for (let i = 0; i < uploadsFiles.length; i += 100) {
-        uploadChunks.push(uploadsFiles.slice(i, i + 100));
-      }
-      for (const chunk of uploadChunks) {
-        try {
-          const { error: removeErr } = await uploadsBucket.remove(chunk);
-          if (removeErr) {
-            console.warn(`[delete] uploads remove error: ${removeErr.message}`);
-          } else {
-            filesRemoved += chunk.length;
-          }
-        } catch (e) {
-          console.warn(`[delete] uploads remove exception: ${e.message}`);
+    // Delete uploads files (in chunks of ≤100)
+    for (const chunk of chunkArray(uploadsFiles)) {
+      try {
+        const { error: removeErr } = await supabase.storage.from(UPLOADS_BUCKET).remove(chunk);
+        if (removeErr) {
+          console.warn(`[delete] uploads remove error: ${removeErr.message}`);
+        } else {
+          filesRemoved += chunk.length;
         }
+      } catch (e) {
+        console.warn(`[delete] uploads remove exception: ${e.message}`);
       }
     }
 
-    // Delete room-scans files (in chunks of 100)
-    if (roomScansFiles.length > 0) {
-      const roomScansBucket = supabase.storage.from('room-scans');
-      const roomScansChunks = [];
-      for (let i = 0; i < roomScansFiles.length; i += 100) {
-        roomScansChunks.push(roomScansFiles.slice(i, i + 100));
-      }
-      for (const chunk of roomScansChunks) {
-        try {
-          const { error: removeErr } = await roomScansBucket.remove(chunk);
-          if (removeErr) {
-            console.warn(`[delete] room-scans remove error: ${removeErr.message}`);
-          } else {
-            filesRemoved += chunk.length;
-          }
-        } catch (e) {
-          console.warn(`[delete] room-scans remove exception: ${e.message}`);
+    // Delete room-scans files (in chunks of ≤100)
+    for (const chunk of chunkArray(roomScansFiles)) {
+      try {
+        const { error: removeErr } = await supabase.storage.from('room-scans').remove(chunk);
+        if (removeErr) {
+          console.warn(`[delete] room-scans remove error: ${removeErr.message}`);
+        } else {
+          filesRemoved += chunk.length;
         }
+      } catch (e) {
+        console.warn(`[delete] room-scans remove exception: ${e.message}`);
       }
     }
 
