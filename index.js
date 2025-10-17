@@ -758,13 +758,18 @@ app.get('/api/projects', async (req, res) => {
 });
 
 // --- Projects: CARDS (Lightweight List) ---
+// NOTE: Must come BEFORE /:id route to avoid "cards" being treated as an ID
 app.get('/api/projects/cards', async (req, res) => {
   try {
     const user_id = req.query.user_id || DEV_USER;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = parseInt(req.query.offset) || 0;
+    
+    const rawLimit = parseInt(req.query.limit);
+    const rawOffset = parseInt(req.query.offset);
+    
+    const limit = (!isNaN(rawLimit) && rawLimit > 0 && rawLimit <= 50) ? rawLimit : 10;
+    const offset = (!isNaN(rawOffset) && rawOffset >= 0) ? rawOffset : 0;
 
-    const { data, error } = await supabase
+    const { data, error} = await supabase
       .from('projects')
       .select('id,name,status,preview_url,updated_at')
       .eq('user_id', user_id)
