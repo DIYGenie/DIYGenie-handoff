@@ -144,6 +144,202 @@ if (!user_id) {
 
 ---
 
+## iOS-Normalized Project Endpoints
+
+The following endpoints use standardized request/response shapes optimized for iOS clients. All responses follow fixed schemas with no extra fields. All errors use the [Standardized Error Format](#standardized-error-format).
+
+### POST /api/projects
+- **Handler file:** `routes/projects.js:16`
+- **Auth:** none (requires user_id in body)
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** -
+- **Request body (JSON):**
+```json
+{
+  "name": "string (min 10 chars, required)",
+  "goal": "string (optional)",
+  "user_id": "uuid (required)",
+  "client": { "budget": "$ | $$ | $$$" }
+}
+```
+- **Response (success):** `201 { id, name, goal, user_id, created_at }`
+- **Response (errors):**
+  - `400 { code: "missing_user_id", message: "..." }`
+  - `400 { code: "invalid_name", message: "..." }`
+  - `400 { code: "create_project_failed", message: "..." }`
+- **Side effects:** Creates project in database, upserts user profile
+- **Logs/phrases:** `[POST /api/projects] user_id=..., project_id=...`
+
+**Sample:**
+```bash
+curl -X POST http://localhost:5000/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"99198c4b-8470-49e2-895c-75593c5aa181","name":"Floating Shelves Project","goal":"Install shelves"}'
+```
+
+**Response:**
+```json
+{
+  "id": "f45d8e9b-9bed-46f9-88b0-4c156c43fe53",
+  "name": "Floating Shelves Project",
+  "goal": "Install shelves",
+  "user_id": "99198c4b-8470-49e2-895c-75593c5aa181",
+  "created_at": "2025-10-19T23:13:51.078657+00:00"
+}
+```
+
+---
+
+### POST /api/projects/:id/photo
+- **Handler file:** `routes/projects.js:69`
+- **Auth:** none
+- **Request headers:** `Content-Type: multipart/form-data` OR `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:**
+  - Multipart: File upload with field name (any)
+  - JSON: `{ "url": "https://..." }`
+- **Response (success):** `200 { ok: true, photo_url: "https://..." }`
+- **Response (errors):**
+  - `400 { code: "invalid_url", message: "...", hint: "..." }`
+  - `400 { code: "invalid_file_type", message: "..." }`
+  - `400 { code: "missing_file_or_url", message: "..." }`
+  - `400 { code: "attach_photo_failed", message: "..." }`
+- **Side effects:** Uploads file to Supabase Storage, updates project.input_image_url
+- **Logs/phrases:** -
+
+**Sample (URL):**
+```bash
+curl -X POST http://localhost:5000/api/projects/PROJECT_ID/photo \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://images.unsplash.com/photo-123"}'
+```
+
+**Sample (File):**
+```bash
+curl -X POST http://localhost:5000/api/projects/PROJECT_ID/photo \
+  -F "file=@room_photo.jpg"
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "photo_url": "https://storage.example.com/projects/PROJECT_ID/1234567890.jpg"
+}
+```
+
+---
+
+### POST /api/projects/:id/preview
+- **Handler file:** `routes/projects.js:128`
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):** `{ "force": boolean }`
+- **Response (success):** `202 { status: "queued", preview_id: null }`
+- **Response (errors):**
+  - `400 { code: "project_not_found", message: "..." }`
+  - `400 { code: "missing_photo", message: "..." }`
+  - `400 { code: "queue_preview_failed", message: "..." }`
+- **Side effects:** Updates project status to 'preview_requested'
+- **Logs/phrases:** `[POST /api/projects/:id/preview] project_id=..., force=...`
+
+**Sample:**
+```bash
+curl -X POST http://localhost:5000/api/projects/PROJECT_ID/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"force":false}'
+```
+
+**Response:**
+```json
+{
+  "status": "queued",
+  "preview_id": null
+}
+```
+
+---
+
+### GET /api/projects/:id/plan
+- **Handler file:** `routes/projects.js:166`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body:** -
+- **Response (success):** `200 { steps: [...], tools: [...], materials: [...], cost_estimate: { total, currency }, updated_at }`
+- **Response (errors):**
+  - `400 { code: "project_not_found", message: "..." }`
+  - `400 { code: "get_plan_failed", message: "..." }`
+- **Side effects:** none (read-only)
+- **Logs/phrases:** -
+
+**Sample:**
+```bash
+curl http://localhost:5000/api/projects/PROJECT_ID/plan
+```
+
+**Response:**
+```json
+{
+  "steps": [],
+  "tools": [],
+  "materials": [],
+  "cost_estimate": {
+    "total": 0,
+    "currency": "USD"
+  },
+  "updated_at": "2025-10-19T23:13:51.964Z"
+}
+```
+
+---
+
+### POST /api/projects/:id/scan
+- **Handler file:** `routes/projects.js:217`
+- **Auth:** none
+- **Request headers:** `Content-Type: application/json`
+- **Query params:** -
+- **Path params:** `id` (project UUID)
+- **Request body (JSON):**
+```json
+{
+  "roomplan": {
+    "width": 10.5,
+    "height": 8.2,
+    "depth": 12.3,
+    "objects": []
+  }
+}
+```
+- **Response (success):** `200 { ok: true }`
+- **Response (errors):**
+  - `400 { code: "missing_roomplan", message: "..." }`
+  - `400 { code: "project_not_found", message: "..." }`
+  - `400 { code: "attach_scan_failed", message: "..." }`
+- **Side effects:** Inserts scan data into room_scans table
+- **Logs/phrases:** `[POST /api/projects/:id/scan] project_id=..., scan saved`
+
+**Sample:**
+```bash
+curl -X POST http://localhost:5000/api/projects/PROJECT_ID/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"roomplan":{"width":10,"height":8,"depth":12,"objects":[]}}'
+```
+
+**Response:**
+```json
+{
+  "ok": true
+}
+```
+
+---
+
 ### GET /me/entitlements/:userId
 - **Handler file:** `index.js:321`
 - **Auth:** none (service-level)

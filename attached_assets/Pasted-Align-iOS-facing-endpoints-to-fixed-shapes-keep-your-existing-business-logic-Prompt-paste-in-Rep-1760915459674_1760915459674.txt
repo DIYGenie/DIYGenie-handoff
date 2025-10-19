@@ -1,0 +1,80 @@
+Align iOS-facing endpoints to fixed shapes; keep your existing business logic.
+
+Prompt (paste in Replit):
+
+Title: Normalize iOS endpoint contracts
+Tasks:
+
+Create routes/projects.js with these routes (skeletons only; call your existing services inside):
+
+const { Router } = require("express");
+const projects = Router();
+
+// POST /api/projects
+projects.post("/", async (req, res, next) => {
+  try {
+    const { name, goal, user_id, client } = req.body;
+    const p = await services.createProject({ name, goal, user_id, client }); // your existing impl
+    res.status(201).json({ id: p.id, name: p.name, goal: p.goal, user_id: p.user_id, created_at: p.created_at });
+  } catch (e) { next(Object.assign(e, { code: "create_project_failed" })); }
+});
+
+// POST /api/projects/:id/photo (multipart or JSON {url})
+projects.post("/:id/photo", async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const photoUrl = req.body?.url || req.file?.url || req.file?.location; // adapt if using multer/S3/Supabase
+    const out = await services.attachPhoto({ projectId: id, photoUrl, file: req.file });
+    res.json({ ok: true, photo_url: out.photo_url });
+  } catch (e) { next(Object.assign(e, { code: "attach_photo_failed" })); }
+});
+
+// POST /api/projects/:id/preview
+projects.post("/:id/preview", async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const { force } = req.body || {};
+    const job = await services.queuePreview({ projectId: id, force });
+    res.status(202).json({ status: job.status, preview_id: job.preview_id ?? null });
+  } catch (e) { next(Object.assign(e, { code: "queue_preview_failed" })); }
+});
+
+// GET /api/projects/:id/plan
+projects.get("/:id/plan", async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const plan = await services.getPlan({ projectId: id });
+    res.json({
+      steps: plan.steps ?? [],
+      tools: plan.tools ?? [],
+      materials: plan.materials ?? [],
+      cost_estimate: { total: plan.cost_estimate?.total ?? 0, currency: "USD" },
+      updated_at: plan.updated_at ?? new Date().toISOString()
+    });
+  } catch (e) { next(Object.assign(e, { code: "get_plan_failed" })); }
+});
+
+// POST /api/projects/:id/scan (RoomPlan JSON)
+projects.post("/:id/scan", async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const { roomplan } = req.body || {};
+    await services.attachScan({ projectId: id, roomplan });
+    res.json({ ok: true });
+  } catch (e) { next(Object.assign(e, { code: "attach_scan_failed" })); }
+});
+
+module.exports = { projects };
+
+
+Mount routes in server.js (below your iOS routes):
+
+const { projects } = require("./routes/projects");
+app.use("/api/projects", projects);
+
+
+Guarantee shapes above (no extra fields; use unified error handler you added in Step 1).
+
+If you use multer/Supabase for file uploads, keep it, but always respond with { ok:true, photo_url }.
+
+Add minimal service shims if needed (e.g., services.createProject) that call your existing logic.

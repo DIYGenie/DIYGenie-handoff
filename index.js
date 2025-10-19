@@ -9,6 +9,7 @@ import entitlementsRouter from './routes/entitlements.js';
 import healthRouter, { healthGet, liveGet, readyGet, fullGet, healthHead } from './routes/health.js';
 import versionRouter, { versionGet, versionHead } from './routes/version.js';
 import iosRouter from './routes/ios.js';
+import projectsRouter from './routes/projects.js';
 import { thumb } from './lib/image.js';
 
 const app = express();
@@ -34,6 +35,7 @@ app.use('/entitlements', entitlementsRouter);
 app.use('/health', healthRouter);
 app.use('/version', versionRouter);
 app.use('/api/ios', iosRouter);
+app.use('/api/projects', projectsRouter);
 
 const upload = multer({ storage: multer.memoryStorage() });
 
