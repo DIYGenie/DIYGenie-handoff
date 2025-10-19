@@ -8,6 +8,7 @@ import planRouter from './routes/plan.js';
 import entitlementsRouter from './routes/entitlements.js';
 import healthRouter, { healthGet, liveGet, readyGet, fullGet, healthHead } from './routes/health.js';
 import versionRouter, { versionGet, versionHead } from './routes/version.js';
+import iosRouter from './routes/ios.js';
 import { thumb } from './lib/image.js';
 
 const app = express();
@@ -20,12 +21,19 @@ app.use((req, res, next) => {
   next();
 });
 
+// Unified error helper
+app.use((req, _res, next) => {
+  req.fail = (code, message, hint) => next(Object.assign(new Error(message), { status: 400, code, hint }));
+  next();
+});
+
 // --- ROUTE MOUNTS (make sure these exist in Production) ---
 app.use('/preview', previewRouter);
 app.use('/plan', planRouter);
 app.use('/entitlements', entitlementsRouter);
 app.use('/health', healthRouter);
 app.use('/version', versionRouter);
+app.use('/api/ios', iosRouter);
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -2442,6 +2450,21 @@ app.head('/api/health/live', healthHead);
 app.head('/api/health/ready', healthHead);
 app.head('/api/health/full', healthHead);
 app.head('/api/version', versionHead);
+
+// --- 404 handler (catch unmatched routes) ---
+app.use((_req, _res, next) => {
+  next(Object.assign(new Error("Route not found"), { status: 404, code: "not_found" }));
+});
+
+// --- Unified error handler ---
+app.use((err, _req, res, _next) => {
+  const status = err.status || 500;
+  res.status(status).json({
+    code: err.code || "internal_error",
+    message: err.message || "Server error",
+    hint: err.hint,
+  });
+});
 
 // --- Listen ---
 const PORT = process.env.PORT || 5000;

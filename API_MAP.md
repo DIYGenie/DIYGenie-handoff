@@ -76,6 +76,74 @@ curl https://your-api.com/
 
 ---
 
+### GET /api/ios/health
+- **Handler file:** `routes/ios.js:5`
+- **Auth:** none
+- **Request headers:** -
+- **Query params:** -
+- **Path params:** -
+- **Request body:** -
+- **Response (success):** `200 { ok: true, ts: "ISO timestamp", version: "0.1.0" }`
+- **Response (errors):** See [Standardized Error Format](#standardized-error-format)
+- **Side effects:** none
+- **Logs/phrases:** -
+- **Note:** iOS-specific health check endpoint with timestamp and version info
+
+**Sample:**
+```bash
+curl https://your-api.com/api/ios/health
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "ts": "2025-10-19T23:06:08.053Z",
+  "version": "0.1.0"
+}
+```
+
+---
+
+## Standardized Error Format
+
+All errors (including 404s) are returned in a standardized JSON envelope:
+
+```json
+{
+  "code": "error_code",
+  "message": "Human-readable error message",
+  "hint": "Optional hint for resolution"
+}
+```
+
+**Example 404:**
+```json
+{
+  "code": "not_found",
+  "message": "Route not found"
+}
+```
+
+**Example Validation Error:**
+```json
+{
+  "code": "missing_user_id",
+  "message": "user_id is required",
+  "hint": "Provide user_id in request body"
+}
+```
+
+**Helper Function:**
+Routes can use `req.fail(code, message, hint)` to trigger standardized errors:
+```javascript
+if (!user_id) {
+  return req.fail("missing_user_id", "user_id is required", "Provide user_id in request body");
+}
+```
+
+---
+
 ### GET /me/entitlements/:userId
 - **Handler file:** `index.js:321`
 - **Auth:** none (service-level)
