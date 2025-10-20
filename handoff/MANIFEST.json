@@ -1,0 +1,119 @@
+{
+  "project": "DIY Genie",
+  "description": "DIY Genie project management API for iOS client",
+  "version": "1.0.0",
+  "baseURL": "https://api.diygenieapp.com",
+  "developmentURL": "http://localhost:5000",
+  "auth": {
+    "header": null,
+    "query": "user_id",
+    "preferredMethod": "query parameter user_id (UUID string)"
+  },
+  "requiredFields": {
+    "createProject": {
+      "user_id": {
+        "type": "string",
+        "format": "uuid",
+        "required": true,
+        "description": "UUID of the user creating the project"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 10,
+        "required": true,
+        "description": "Project name (minimum 10 characters)"
+      },
+      "goal": {
+        "type": "string",
+        "required": false,
+        "description": "Optional project goal or description"
+      },
+      "client.budget": {
+        "type": "string",
+        "enum": ["$", "$$", "$$$"],
+        "required": false,
+        "default": "$$",
+        "description": "Budget level indicator"
+      }
+    },
+    "listProjects": {
+      "user_id": {
+        "type": "string",
+        "format": "uuid",
+        "required": true,
+        "location": "query",
+        "description": "UUID of the user whose projects to list"
+      }
+    },
+    "attachPhoto": {
+      "file": {
+        "type": "file",
+        "mimeType": "image/*",
+        "required": false,
+        "description": "Image file to upload (multipart/form-data)"
+      },
+      "url": {
+        "type": "string",
+        "format": "url",
+        "required": false,
+        "description": "URL of existing image (JSON body, alternative to file)"
+      },
+      "note": "Provide either file OR url, not both"
+    },
+    "queuePreview": {
+      "force": {
+        "type": "boolean",
+        "required": false,
+        "default": false,
+        "description": "Force regeneration of preview"
+      }
+    }
+  },
+  "endpoints": [
+    "GET /health",
+    "GET /api/projects",
+    "POST /api/projects",
+    "POST /api/projects/{id}/photo",
+    "POST /api/projects/{id}/preview",
+    "GET /api/projects/{id}/plan"
+  ],
+  "errorCodes": [
+    "missing_user_id",
+    "invalid_name",
+    "project_not_found",
+    "invalid_url",
+    "invalid_file_type",
+    "missing_file_or_url",
+    "missing_photo",
+    "create_project_failed",
+    "attach_photo_failed",
+    "queue_preview_failed",
+    "get_plan_failed"
+  ],
+  "statusCodes": {
+    "200": "OK - Request successful",
+    "201": "Created - Resource created successfully",
+    "202": "Accepted - Request accepted for async processing",
+    "400": "Bad Request - Validation error or missing required fields",
+    "404": "Not Found - Resource not found",
+    "422": "Unprocessable Entity - Invalid data format",
+    "500": "Internal Server Error - Server error"
+  },
+  "sampleFiles": {
+    "health": "samples/health.json",
+    "projectsList": "samples/projects-list.json",
+    "projectCreate": "samples/project-create.json",
+    "photoAttach": "samples/photo-attach.json",
+    "previewStatus": "samples/preview-status.json",
+    "plan": "samples/plan.json",
+    "error": "samples/error-example.json"
+  },
+  "notes": [
+    "All IDs use UUID v4 format",
+    "All timestamps use ISO 8601 format with timezone",
+    "File uploads accept any image/* mimetype (JPEG, PNG, HEIC, etc.)",
+    "Budget values must be exactly '$', '$$', or '$$$'",
+    "Preview generation is async - returns 202 immediately",
+    "All responses include 'ok' field or standardized error structure"
+  ]
+}

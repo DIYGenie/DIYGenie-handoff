@@ -1,0 +1,66 @@
+{
+  "steps": [
+    {
+      "number": 1,
+      "title": "Measure and mark wall",
+      "description": "Use a level and tape measure to mark the desired height and placement of shelves on the wall. Mark stud locations with painter's tape.",
+      "duration": "15 min"
+    },
+    {
+      "number": 2,
+      "title": "Install shelf brackets",
+      "description": "Drill pilot holes at marked locations and secure brackets to wall studs using appropriate screws. Ensure brackets are level.",
+      "duration": "30 min"
+    },
+    {
+      "number": 3,
+      "title": "Attach shelves",
+      "description": "Slide shelf boards onto installed brackets and secure with set screws or mounting hardware provided.",
+      "duration": "20 min"
+    }
+  ],
+  "tools": [
+    {
+      "name": "Level",
+      "required": true
+    },
+    {
+      "name": "Drill with bits",
+      "required": true
+    },
+    {
+      "name": "Stud finder",
+      "required": true
+    },
+    {
+      "name": "Tape measure",
+      "required": true
+    },
+    {
+      "name": "Pencil",
+      "required": true
+    }
+  ],
+  "materials": [
+    {
+      "item": "Floating shelf boards (48\" x 10\")",
+      "quantity": "2",
+      "cost": "$50"
+    },
+    {
+      "item": "Hidden shelf brackets",
+      "quantity": "4",
+      "cost": "$20"
+    },
+    {
+      "item": "Wood screws (3\" #10)",
+      "quantity": "1 box",
+      "cost": "$5"
+    }
+  ],
+  "cost_estimate": {
+    "total": 75,
+    "currency": "USD"
+  },
+  "updated_at": "2025-10-19T23:13:51.964Z"
+}

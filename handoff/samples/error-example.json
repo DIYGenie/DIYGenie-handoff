@@ -1,0 +1,5 @@
+{
+  "code": "missing_user_id",
+  "message": "user_id is required",
+  "hint": "Provide user_id in request body"
+}

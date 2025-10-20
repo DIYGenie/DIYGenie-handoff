@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "id": "f45d8e9b-9bed-46f9-88b0-4c156c43fe53",
+      "name": "Floating Shelves Installation",
+      "status": "preview_requested",
+      "input_image_url": "https://storage.example.com/uploads/projects/f45d8e9b/photo.jpg",
+      "preview_url": null
+    },
+    {
+      "id": "84ebcc92-54ec-4094-af5e-5b8c962ec426",
+      "name": "Kitchen Cabinet Refinishing",
+      "status": "planned",
+      "input_image_url": "https://storage.example.com/uploads/projects/84ebcc92/photo.jpg",
+      "preview_url": "https://storage.example.com/previews/84ebcc92/preview.jpg"
+    }
+  ]
+}
